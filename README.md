@@ -120,6 +120,19 @@ OCR is enabled automatically when `tesseract` is on PATH. The server degrades gr
 
 For languages other than English, install the language packs (e.g. `brew install tesseract-lang` on macOS).
 
+## Performance
+
+The server is a compiled Go binary with no runtime to start up — no JVM, no Python interpreter, no dependency loading. This means near-zero startup overhead compared to Python-based alternatives like the original `markitdown`.
+
+| Format | Speed | Notes |
+|--------|-------|-------|
+| HTML, CSV, JSON, XML, TXT, MD | Very fast | File read + in-memory parsing, sub-millisecond for typical files |
+| DOCX, XLSX, XLS, PPTX | Fast | Native Go ZIP parsing, no subprocess |
+| PDF | Moderate | Go PDF library; depends on document complexity |
+| PNG, JPG, JPEG | Tesseract-bound | OCR is a subprocess call; Go adds no overhead |
+| PPTX with embedded images | Tesseract-bound | One OCR call per embedded image |
+| HTTP/HTTPS URLs | Network-bound | Go's HTTP client is efficient but can't speed up a slow origin |
+
 ## Development
 
 ```bash
