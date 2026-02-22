@@ -1,9 +1,10 @@
 module github.com/Cortexa-LLC/mcp/src/markitdown
 
-go 1.23
+go 1.24.1
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mark3labs/mcp-go v0.20.0
 	github.com/xuri/excelize/v2 v2.8.1
 )

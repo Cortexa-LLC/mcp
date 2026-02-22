@@ -20,14 +20,14 @@ func newTestConverter() *Converter {
 func TestConverter_ConvertFile_HTML(t *testing.T) {
 	path := writeTempFile(t, "page.html",
 		`<html><body><h1>Hello</h1><p>World</p></body></html>`)
-	out, err := newTestConverter().ConvertFile(context.Background(), path, false)
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
 	assertNoErr(t, err)
 	assertContains(t, out, "Hello")
 }
 
 func TestConverter_ConvertFile_CSV(t *testing.T) {
 	path := writeTempFile(t, "data.csv", "A,B\n1,2\n")
-	out, err := newTestConverter().ConvertFile(context.Background(), path, false)
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
 	assertNoErr(t, err)
 	assertContains(t, out, "A")
 	assertContains(t, out, "|")
@@ -35,7 +35,7 @@ func TestConverter_ConvertFile_CSV(t *testing.T) {
 
 func TestConverter_ConvertFile_JSON(t *testing.T) {
 	path := writeTempFile(t, "data.json", `{"key":"value"}`)
-	out, err := newTestConverter().ConvertFile(context.Background(), path, false)
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
 	assertNoErr(t, err)
 	assertContains(t, out, "```json")
 }
@@ -45,7 +45,7 @@ func TestConverter_ConvertFile_DOCX(t *testing.T) {
 		`<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>`+
 			`<w:r><w:t>Document Title</w:t></w:r></w:p>`+
 			`<w:p><w:r><w:t>Body text.</w:t></w:r></w:p>`)
-	out, err := newTestConverter().ConvertFile(context.Background(), path, false)
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
 	assertNoErr(t, err)
 	assertContains(t, out, "# Document Title")
 	assertContains(t, out, "Body text.")
@@ -56,21 +56,41 @@ func TestConverter_ConvertFile_XLSX(t *testing.T) {
 		{"Product", "Price"},
 		{"Widget", "9.99"},
 	})
-	out, err := newTestConverter().ConvertFile(context.Background(), path, false)
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
 	assertNoErr(t, err)
 	assertContains(t, out, "Product")
 	assertContains(t, out, "Widget")
 }
 
+func TestConverter_ConvertFile_PDF(t *testing.T) {
+	path := writeTempFile(t, "test.pdf", string(minimalPDF))
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
+	assertNoErr(t, err)
+	assertContains(t, out, "Hello PDF")
+}
+
+func TestConverter_ConvertFile_PPTX(t *testing.T) {
+	path := makePPTX(t, []pptxTestSlide{
+		{
+			titleXML: `<a:r><a:t>Deck Title</a:t></a:r>`,
+			bodyXML:  `<a:r><a:t>First slide content.</a:t></a:r>`,
+		},
+	})
+	out, err := newTestConverter().ConvertFile(context.Background(), path)
+	assertNoErr(t, err)
+	assertContains(t, out, "## Deck Title")
+	assertContains(t, out, "First slide content.")
+}
+
 func TestConverter_ConvertFile_NotFound(t *testing.T) {
 	_, err := newTestConverter().ConvertFile(
-		context.Background(), "/no/such/file.html", false)
+		context.Background(), "/no/such/file.html")
 	assertErr(t, err)
 }
 
 func TestConverter_ConvertFile_UnsupportedFormat(t *testing.T) {
-	path := writeTempFile(t, "deck.pptx", "not a real pptx")
-	_, err := newTestConverter().ConvertFile(context.Background(), path, false)
+	path := writeTempFile(t, "archive.zip", "not a supported format")
+	_, err := newTestConverter().ConvertFile(context.Background(), path)
 	assertErr(t, err)
 }
 
@@ -81,7 +101,7 @@ func TestConverter_ConvertFile_TooLarge(t *testing.T) {
 	conv := NewConverter()
 	conv.cfg.MaxFileSizeBytes = 0
 
-	_, err := conv.ConvertFile(context.Background(), path, false)
+	_, err := conv.ConvertFile(context.Background(), path)
 	assertErr(t, err)
 }
 
@@ -91,21 +111,21 @@ func TestConverter_ConvertURI_FileScheme(t *testing.T) {
 	path := writeTempFile(t, "page.html",
 		`<html><body><p>via file URI</p></body></html>`)
 	uri := fmt.Sprintf("file://%s", path)
-	out, err := newTestConverter().ConvertURI(context.Background(), uri, false)
+	out, err := newTestConverter().ConvertURI(context.Background(), uri)
 	assertNoErr(t, err)
 	assertContains(t, out, "via file URI")
 }
 
 func TestConverter_ConvertURI_UnsupportedScheme(t *testing.T) {
 	_, err := newTestConverter().ConvertURI(
-		context.Background(), "ftp://example.com/file.txt", false)
+		context.Background(), "ftp://example.com/file.txt")
 	assertErr(t, err)
 }
 
 func TestConverter_ConvertURI_InvalidURI(t *testing.T) {
 	// url.Parse is permissive; a truly invalid URI still has no scheme
 	_, err := newTestConverter().ConvertURI(
-		context.Background(), "://bad", false)
+		context.Background(), "://bad")
 	assertErr(t, err)
 }
 
@@ -113,7 +133,7 @@ func TestConverter_ConvertURI_InvalidURI(t *testing.T) {
 
 func TestConverter_GetConversionInfo_ContainsFormats(t *testing.T) {
 	out := newTestConverter().GetConversionInfo(context.Background())
-	for _, fmt := range []string{"html", "csv", "json", "xml", "docx", "xlsx"} {
+	for _, fmt := range []string{"html", "csv", "json", "xml", "docx", "xlsx", "pptx", "pdf"} {
 		assertContains(t, out, fmt)
 	}
 }

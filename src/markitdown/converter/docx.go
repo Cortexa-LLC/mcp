@@ -1,54 +1,73 @@
 package converter
 
-// DOCX → Markdown converter.
+// docx.go — DOCX → Markdown via streaming OOXML XML parser.
 //
-// DOCX files are ZIP archives containing OOXML. The main document lives at
-// word/document.xml. We stream-parse that XML, tracking paragraph/run/table
-// context to produce clean Markdown without any external dependencies.
+// DOCX files are ZIP archives. The main document is at docxMainDocument.
+// We stream-parse its XML, maintaining a lightweight state machine for
+// paragraphs, runs, and tables, then emit Markdown.
 
 import (
 	"archive/zip"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
+
+// docxMainDocument is the path of the primary document XML inside the ZIP.
+const docxMainDocument = "word/document.xml"
+
+// headingPrefixes maps OOXML paragraph style names to Markdown heading prefixes.
+// Using a map eliminates the repetitive switch and makes adding heading levels trivial.
+var headingPrefixes = map[string]string{
+	"Heading1": "# ",
+	"Heading2": "## ",
+	"Heading3": "### ",
+	"Heading4": "#### ",
+	"Heading5": "##### ",
+	"Heading6": "###### ",
+}
+
+// paragraphBreak is appended after every non-list paragraph.
+const paragraphBreak = "\n\n"
 
 func convertDOCX(filePath string) (string, error) {
 	zr, err := zip.OpenReader(filePath)
 	if err != nil {
-		return "", fmt.Errorf("open docx: %w", err)
+		return "", fmt.Errorf("open docx %s: %w", filePath, err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	var docFile *zip.File
 	for _, f := range zr.File {
-		if f.Name == "word/document.xml" {
+		if f.Name == docxMainDocument {
 			docFile = f
 			break
 		}
 	}
 	if docFile == nil {
-		return "", fmt.Errorf("word/document.xml not found in %s", filePath)
+		return "", fmt.Errorf("%s not found in %s", docxMainDocument, filePath)
 	}
 
 	rc, err := docFile.Open()
 	if err != nil {
-		return "", fmt.Errorf("open document.xml: %w", err)
+		return "", fmt.Errorf("open %s: %w", docxMainDocument, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	return parseDocumentXML(rc)
 }
 
 // ---------------------------------------------------------------------------
-// Streaming XML parser
+// Streaming XML state machine
 // ---------------------------------------------------------------------------
 
 type docxParser struct {
 	out strings.Builder
 
-	// element name stack for context queries
+	// element name stack — used for ancestor queries (e.g. "are we in pPr?")
 	stack []string
 
 	// paragraph state
@@ -93,7 +112,7 @@ func parseDocumentXML(r io.Reader) (string, error) {
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -115,10 +134,21 @@ func parseDocumentXML(r io.Reader) (string, error) {
 	return p.out.String(), nil
 }
 
+// handleStart is the top-level dispatcher; it delegates to focused helpers to
+// keep each XML context's concerns separated.
 func (p *docxParser) handleStart(t xml.StartElement) {
 	switch t.Name.Local {
+	case "tbl", "tr", "tc":
+		p.handleTableStart(t)
+	case "p", "pStyle", "numPr", "ilvl":
+		p.handleParaStart(t)
+	case "r", "b", "i", "br":
+		p.handleRunStart(t)
+	}
+}
 
-	// --- table ---
+func (p *docxParser) handleTableStart(t xml.StartElement) {
+	switch t.Name.Local {
 	case "tbl":
 		p.inTable = true
 		p.rows = nil
@@ -127,8 +157,11 @@ func (p *docxParser) handleStart(t xml.StartElement) {
 	case "tc":
 		p.inCell = true
 		p.cellText.Reset()
+	}
+}
 
-	// --- paragraph ---
+func (p *docxParser) handleParaStart(t xml.StartElement) {
+	switch t.Name.Local {
 	case "p":
 		p.inPara = true
 		p.paraStyle = ""
@@ -145,10 +178,15 @@ func (p *docxParser) handleStart(t xml.StartElement) {
 		}
 	case "ilvl":
 		if p.inPara && p.inCtx("numPr") {
-			fmt.Sscanf(attrVal(t, "val"), "%d", &p.listLevel)
+			if lvl, err := strconv.Atoi(attrVal(t, "val")); err == nil {
+				p.listLevel = lvl
+			}
 		}
+	}
+}
 
-	// --- run ---
+func (p *docxParser) handleRunStart(t xml.StartElement) {
+	switch t.Name.Local {
 	case "r":
 		if p.inPara {
 			p.inRun = true
@@ -157,6 +195,7 @@ func (p *docxParser) handleStart(t xml.StartElement) {
 			p.runText.Reset()
 		}
 	case "b":
+		// w:b with val="0" explicitly turns bold off.
 		if p.inRun && p.inCtx("rPr") && attrVal(t, "val") != "0" {
 			p.runBold = true
 		}
@@ -173,23 +212,19 @@ func (p *docxParser) handleStart(t xml.StartElement) {
 
 func (p *docxParser) handleEnd(local string) {
 	switch local {
-
 	case "r":
 		if p.inRun {
-			text := p.runText.String()
 			if !p.inCell {
-				text = applyInlineFormat(text, p.runBold, p.runItal)
-				p.paraText.WriteString(text)
+				p.paraText.WriteString(applyInlineFormat(p.runText.String(), p.runBold, p.runItal))
 			}
-			// When inCell, CharData was already written directly to cellText.
+			// When inCell, CharData was written directly to cellText.
 			p.inRun = false
 		}
 
 	case "p":
 		if p.inPara {
-			paraText := strings.TrimSpace(p.paraText.String())
-			if paraText != "" && !p.inCell {
-				p.out.WriteString(renderParagraph(paraText, p.paraStyle, p.isList, p.listLevel))
+			if text := strings.TrimSpace(p.paraText.String()); text != "" && !p.inCell {
+				p.out.WriteString(renderParagraph(text, p.paraStyle, p.isList, p.listLevel))
 			}
 			p.inPara = false
 		}
@@ -209,7 +244,7 @@ func (p *docxParser) handleEnd(local string) {
 
 	case "tbl":
 		if p.inTable {
-			p.out.WriteString(renderTable(p.rows))
+			p.out.WriteString(renderMarkdownTable(p.rows))
 			p.out.WriteByte('\n')
 			p.inTable = false
 			p.rows = nil
@@ -231,73 +266,13 @@ func (p *docxParser) handleText(text string) {
 // ---------------------------------------------------------------------------
 
 func renderParagraph(text, style string, isList bool, listLvl int) string {
-	switch style {
-	case "Heading1":
-		return "# " + text + "\n\n"
-	case "Heading2":
-		return "## " + text + "\n\n"
-	case "Heading3":
-		return "### " + text + "\n\n"
-	case "Heading4":
-		return "#### " + text + "\n\n"
-	case "Heading5":
-		return "##### " + text + "\n\n"
-	case "Heading6":
-		return "###### " + text + "\n\n"
+	if prefix, ok := headingPrefixes[style]; ok {
+		return prefix + text + paragraphBreak
 	}
 	if isList {
 		return strings.Repeat("  ", listLvl) + "- " + text + "\n"
 	}
-	return text + "\n\n"
-}
-
-func renderTable(rows [][]string) string {
-	if len(rows) == 0 {
-		return ""
-	}
-	maxCols := 0
-	for _, row := range rows {
-		if len(row) > maxCols {
-			maxCols = len(row)
-		}
-	}
-	if maxCols == 0 {
-		return ""
-	}
-
-	cell := func(row []string, i int) string {
-		if i < len(row) {
-			return strings.ReplaceAll(row[i], "|", "\\|")
-		}
-		return ""
-	}
-
-	var sb strings.Builder
-
-	// Header
-	sb.WriteString("|")
-	for i := 0; i < maxCols; i++ {
-		sb.WriteString(" " + cell(rows[0], i) + " |")
-	}
-	sb.WriteByte('\n')
-
-	// Separator
-	sb.WriteString("|")
-	for i := 0; i < maxCols; i++ {
-		sb.WriteString(" --- |")
-	}
-	sb.WriteByte('\n')
-
-	// Data rows
-	for _, row := range rows[1:] {
-		sb.WriteString("|")
-		for i := 0; i < maxCols; i++ {
-			sb.WriteString(" " + cell(row, i) + " |")
-		}
-		sb.WriteByte('\n')
-	}
-
-	return sb.String()
+	return text + paragraphBreak
 }
 
 func applyInlineFormat(text string, bold, italic bool) string {

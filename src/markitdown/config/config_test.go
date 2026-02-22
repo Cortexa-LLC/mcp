@@ -5,17 +5,17 @@ import (
 )
 
 func TestLoad_Defaults(t *testing.T) {
-	t.Setenv("MARKITDOWN_MAX_FILE_BYTES", "")
+	t.Setenv(EnvMaxFileBytes, "")
 
 	cfg := Load()
 
-	if cfg.MaxFileSizeBytes != defaultMaxFileBytes {
-		t.Errorf("MaxFileSizeBytes = %d, want %d", cfg.MaxFileSizeBytes, defaultMaxFileBytes)
+	if cfg.MaxFileSizeBytes != DefaultMaxFileBytes {
+		t.Errorf("MaxFileSizeBytes = %d, want %d", cfg.MaxFileSizeBytes, DefaultMaxFileBytes)
 	}
 }
 
 func TestLoad_MaxFileBytesFromEnv(t *testing.T) {
-	t.Setenv("MARKITDOWN_MAX_FILE_BYTES", "1048576") // 1 MB
+	t.Setenv(EnvMaxFileBytes, "1048576") // 1 MiB
 
 	cfg := Load()
 
@@ -25,23 +25,28 @@ func TestLoad_MaxFileBytesFromEnv(t *testing.T) {
 }
 
 func TestLoad_InvalidMaxFileBytesIgnored(t *testing.T) {
-	t.Setenv("MARKITDOWN_MAX_FILE_BYTES", "not-a-number")
+	t.Setenv(EnvMaxFileBytes, "not-a-number")
 
 	cfg := Load()
 
-	// Invalid value should fall back to default.
-	if cfg.MaxFileSizeBytes != defaultMaxFileBytes {
-		t.Errorf("MaxFileSizeBytes = %d, want default %d", cfg.MaxFileSizeBytes, defaultMaxFileBytes)
+	if cfg.MaxFileSizeBytes != DefaultMaxFileBytes {
+		t.Errorf("MaxFileSizeBytes = %d, want default %d", cfg.MaxFileSizeBytes, DefaultMaxFileBytes)
 	}
 }
 
 func TestLoad_ZeroMaxFileBytesIgnored(t *testing.T) {
-	t.Setenv("MARKITDOWN_MAX_FILE_BYTES", "0")
+	t.Setenv(EnvMaxFileBytes, "0")
 
 	cfg := Load()
 
-	// Zero is not a valid limit; fall back to default.
-	if cfg.MaxFileSizeBytes != defaultMaxFileBytes {
-		t.Errorf("MaxFileSizeBytes = %d, want default %d", cfg.MaxFileSizeBytes, defaultMaxFileBytes)
+	if cfg.MaxFileSizeBytes != DefaultMaxFileBytes {
+		t.Errorf("MaxFileSizeBytes = %d, want default %d", cfg.MaxFileSizeBytes, DefaultMaxFileBytes)
+	}
+}
+
+func TestMaxFileSizeMB(t *testing.T) {
+	cfg := &Config{MaxFileSizeBytes: 10 << 20} // 10 MiB
+	if got := cfg.MaxFileSizeMB(); got != 10 {
+		t.Errorf("MaxFileSizeMB() = %d, want 10", got)
 	}
 }

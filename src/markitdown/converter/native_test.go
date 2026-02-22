@@ -12,7 +12,8 @@ func TestCanConvert_NativeFormats(t *testing.T) {
 	c := newFormatConverter()
 	native := []string{
 		"doc.html", "doc.htm", "doc.csv", "doc.json",
-		"doc.xml", "doc.txt", "doc.md", "doc.docx", "doc.xlsx", "doc.xls",
+		"doc.xml", "doc.txt", "doc.md", "doc.docx", "doc.xlsx", "doc.xls", "doc.pptx",
+		"doc.pdf", "doc.png", "doc.jpg", "doc.jpeg",
 	}
 	for _, name := range native {
 		if !c.CanConvert(name) {
@@ -23,7 +24,7 @@ func TestCanConvert_NativeFormats(t *testing.T) {
 
 func TestCanConvert_NonNativeFormats(t *testing.T) {
 	c := newFormatConverter()
-	nonNative := []string{"doc.pdf", "doc.pptx", "doc.ppt", "doc.mp3", "doc.wav", "doc.jpg"}
+	nonNative := []string{"doc.ppt", "doc.mp3", "doc.wav"}
 	for _, name := range nonNative {
 		if c.CanConvert(name) {
 			t.Errorf("CanConvert(%q) = true, want false", name)
@@ -54,7 +55,7 @@ func TestSupportedFormats_ContainsExpected(t *testing.T) {
 	c := newFormatConverter()
 	fmts := c.SupportedFormats()
 
-	want := []string{"html", "csv", "json", "xml", "txt", "md", "docx", "xlsx"}
+	want := []string{"html", "csv", "json", "xml", "txt", "md", "docx", "xlsx", "pptx", "pdf", "png", "jpg", "jpeg"}
 	set := make(map[string]bool, len(fmts))
 	for _, f := range fmts {
 		set[f] = true
@@ -179,7 +180,7 @@ func TestConvertHTML_Basic(t *testing.T) {
 // ---- unsupported -----------------------------------------------------------
 
 func TestConvertFile_UnsupportedFormat(t *testing.T) {
-	path := writeTempFile(t, "doc.pdf", "not a real pdf")
+	path := writeTempFile(t, "archive.zip", "not a supported format")
 	c := newFormatConverter()
 	_, err := c.ConvertFile(path)
 	assertErr(t, err)

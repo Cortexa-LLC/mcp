@@ -36,13 +36,28 @@ func TestConvertXLSX_SheetHeading(t *testing.T) {
 
 func TestConvertXLSX_MultipleSheets(t *testing.T) {
 	f := excelize.NewFile()
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
-	f.SetCellValue("Sheet1", "A1", "S1-Header")
-	f.SetCellValue("Sheet1", "A2", "s1-value")
-	f.NewSheet("Sheet2")
-	f.SetCellValue("Sheet2", "A1", "S2-Header")
-	f.SetCellValue("Sheet2", "A2", "s2-value")
+	if err := f.SetCellValue("Sheet1", "A1", "S1-Header"); err != nil {
+		t.Fatalf("SetCellValue: %v", err)
+	}
+	if err := f.SetCellValue("Sheet1", "A2", "s1-value"); err != nil {
+		t.Fatalf("SetCellValue: %v", err)
+	}
+
+	if _, err := f.NewSheet("Sheet2"); err != nil {
+		t.Fatalf("NewSheet: %v", err)
+	}
+	if err := f.SetCellValue("Sheet2", "A1", "S2-Header"); err != nil {
+		t.Fatalf("SetCellValue: %v", err)
+	}
+	if err := f.SetCellValue("Sheet2", "A2", "s2-value"); err != nil {
+		t.Fatalf("SetCellValue: %v", err)
+	}
 
 	path := filepath.Join(t.TempDir(), "multi.xlsx")
 	if err := f.SaveAs(path); err != nil {

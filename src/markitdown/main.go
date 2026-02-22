@@ -9,8 +9,21 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// Server identity constants.
+const (
+	serverName    = "markitdown"
+	serverVersion = "0.1.0"
+)
+
+// MCP tool parameter key constants — shared between schema definitions and
+// argument extraction so a typo in one place is caught by the other.
+const (
+	argURI      = "uri"
+	argFilePath = "file_path"
+)
+
 func main() {
-	s := server.NewMCPServer("markitdown", "0.1.0")
+	s := server.NewMCPServer(serverName, serverVersion)
 	conv := converter.NewConverter()
 	registerTools(s, conv)
 
@@ -19,30 +32,25 @@ func main() {
 	}
 }
 
-func registerTools(s *server.MCPServer, conv *converter.Converter) {
+// registerTools binds MCP tool definitions to their handlers.
+// It accepts the FileConverter interface so tests can inject a mock.
+func registerTools(s *server.MCPServer, conv converter.FileConverter) {
 	// convert_to_markdown — convert a URI to Markdown
 	s.AddTool(
 		mcp.NewTool("convert_to_markdown",
 			mcp.WithDescription("Convert a URI (http://, https://, or file://) to Markdown. "+
-				"Simple formats (HTML, CSV, JSON, XML) are handled natively; "+
-				"complex formats (PDF, DOCX, XLSX, PPTX, etc.) delegate to the markitdown CLI."),
-			mcp.WithString("uri",
+				"All conversions are handled natively in Go (HTML, CSV, JSON, XML, DOCX, XLSX)."),
+			mcp.WithString(argURI,
 				mcp.Required(),
-				mcp.Description("The URI to convert (e.g. https://example.com or file:///path/to/file.pdf)"),
-			),
-			mcp.WithBoolean("enable_plugins",
-				mcp.Description("Enable markitdown plugins (e.g. LLM-based image descriptions). "+
-					"Defaults to the MARKITDOWN_ENABLE_PLUGINS env var."),
+				mcp.Description("The URI to convert (e.g. https://example.com or file:///path/to/doc.docx)"),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			uri, ok := req.Params.Arguments["uri"].(string)
+			uri, ok := req.Params.Arguments[argURI].(string)
 			if !ok || uri == "" {
-				return mcp.NewToolResultError("uri is required"), nil
+				return mcp.NewToolResultError(argURI + " is required"), nil
 			}
-			enablePlugins, _ := req.Params.Arguments["enable_plugins"].(bool)
-
-			result, err := conv.ConvertURI(ctx, uri, enablePlugins)
+			result, err := conv.ConvertURI(ctx, uri)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -54,24 +62,18 @@ func registerTools(s *server.MCPServer, conv *converter.Converter) {
 	s.AddTool(
 		mcp.NewTool("convert_file_to_markdown",
 			mcp.WithDescription("Convert a local file to Markdown by absolute path. "+
-				"Simple formats (HTML, CSV, JSON, XML, TXT, MD) are handled natively; "+
-				"complex formats (PDF, DOCX, XLSX, PPTX, etc.) delegate to the markitdown CLI."),
-			mcp.WithString("file_path",
+				"Supported formats: HTML, HTM, CSV, JSON, XML, TXT, MD, DOCX, XLSX, XLS, PPTX, PDF, PNG, JPG, JPEG (OCR via Tesseract if installed)."),
+			mcp.WithString(argFilePath,
 				mcp.Required(),
 				mcp.Description("Absolute path to the local file to convert"),
 			),
-			mcp.WithBoolean("enable_plugins",
-				mcp.Description("Enable markitdown plugins. Defaults to MARKITDOWN_ENABLE_PLUGINS env var."),
-			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			filePath, ok := req.Params.Arguments["file_path"].(string)
+			filePath, ok := req.Params.Arguments[argFilePath].(string)
 			if !ok || filePath == "" {
-				return mcp.NewToolResultError("file_path is required"), nil
+				return mcp.NewToolResultError(argFilePath + " is required"), nil
 			}
-			enablePlugins, _ := req.Params.Arguments["enable_plugins"].(bool)
-
-			result, err := conv.ConvertFile(ctx, filePath, enablePlugins)
+			result, err := conv.ConvertFile(ctx, filePath)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -79,11 +81,10 @@ func registerTools(s *server.MCPServer, conv *converter.Converter) {
 		},
 	)
 
-	// get_conversion_info — list formats and converter availability
+	// get_conversion_info — list formats and configuration
 	s.AddTool(
 		mcp.NewTool("get_conversion_info",
-			mcp.WithDescription("Return information about supported file formats, which converter handles each, "+
-				"and whether the markitdown Python CLI is available."),
+			mcp.WithDescription("Return supported file formats, conversion approach, and active configuration."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText(conv.GetConversionInfo(ctx)), nil
