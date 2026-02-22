@@ -1,0 +1,5 @@
+# Test coverage
+cover.out
+
+# Compiled binaries
+src/markitdown/markitdown-mcp
