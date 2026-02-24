@@ -25,7 +25,13 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that converts
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Cortexa-LLC/mcp/main/install.sh | bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Cortexa-LLC/mcp/main/install.py | python3
+
+# Windows (PowerShell)
+git clone https://github.com/Cortexa-LLC/mcp.git
+cd mcp
+python install.py
 ```
 
 Or clone and run manually:
@@ -33,7 +39,7 @@ Or clone and run manually:
 ```bash
 git clone https://github.com/Cortexa-LLC/mcp.git
 cd mcp
-./install.sh
+python3 install.py
 ```
 
 ## Manual Build
