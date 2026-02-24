@@ -82,8 +82,7 @@ Config file locations:
 
 | Tool | Description |
 |------|-------------|
-| `convert_file_to_markdown` | Convert a local file by absolute path |
-| `convert_to_markdown` | Convert a URI (`file://`, `http://`, `https://`) |
+| `convert_to_markdown` | Convert a local file (absolute path) or `http://`/`https://` URL to Markdown |
 | `get_conversion_info` | List supported formats and active configuration |
 
 ## Configuration

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/Cortexa-LLC/mcp/src/markitdown/converter"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -18,8 +19,7 @@ const (
 // MCP tool parameter key constants — shared between schema definitions and
 // argument extraction so a typo in one place is caught by the other.
 const (
-	argURI      = "uri"
-	argFilePath = "file_path"
+	argURI = "uri"
 )
 
 func main() {
@@ -35,45 +35,29 @@ func main() {
 // registerTools binds MCP tool definitions to their handlers.
 // It accepts the FileConverter interface so tests can inject a mock.
 func registerTools(s *server.MCPServer, conv converter.FileConverter) {
-	// convert_to_markdown — convert a URI to Markdown
+	// convert_to_markdown — convert a file path or URL to Markdown
 	s.AddTool(
 		mcp.NewTool("convert_to_markdown",
-			mcp.WithDescription("Convert a URI (http://, https://, or file://) to Markdown. "+
-				"All conversions are handled natively in Go (HTML, CSV, JSON, XML, DOCX, XLSX)."),
+			mcp.WithDescription("Convert a file or URL to Markdown. "+
+				"Pass an absolute file path (e.g. /path/to/doc.pdf) or an http:// / https:// URL. "+
+				"Supported formats: HTML, HTM, CSV, JSON, XML, TXT, MD, DOCX, XLSX, XLS, PPTX, PDF, PNG, JPG, JPEG (OCR via Tesseract if installed)."),
 			mcp.WithString(argURI,
 				mcp.Required(),
-				mcp.Description("The URI to convert (e.g. https://example.com or file:///path/to/doc.docx)"),
+				mcp.Description("Absolute file path or http/https URL to convert"),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			uri, ok := req.Params.Arguments[argURI].(string)
-			if !ok || uri == "" {
+			input, ok := req.Params.Arguments[argURI].(string)
+			if !ok || input == "" {
 				return mcp.NewToolResultError(argURI + " is required"), nil
 			}
-			result, err := conv.ConvertURI(ctx, uri)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			var result string
+			var err error
+			if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+				result, err = conv.ConvertURI(ctx, input)
+			} else {
+				result, err = conv.ConvertFile(ctx, input)
 			}
-			return mcp.NewToolResultText(result), nil
-		},
-	)
-
-	// convert_file_to_markdown — convert a local file path to Markdown
-	s.AddTool(
-		mcp.NewTool("convert_file_to_markdown",
-			mcp.WithDescription("Convert a local file to Markdown by absolute path. "+
-				"Supported formats: HTML, HTM, CSV, JSON, XML, TXT, MD, DOCX, XLSX, XLS, PPTX, PDF, PNG, JPG, JPEG (OCR via Tesseract if installed)."),
-			mcp.WithString(argFilePath,
-				mcp.Required(),
-				mcp.Description("Absolute path to the local file to convert"),
-			),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			filePath, ok := req.Params.Arguments[argFilePath].(string)
-			if !ok || filePath == "" {
-				return mcp.NewToolResultError(argFilePath + " is required"), nil
-			}
-			result, err := conv.ConvertFile(ctx, filePath)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
