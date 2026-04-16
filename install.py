@@ -38,7 +38,7 @@ MCPS = {
         "bin_name": "kg.exe" if IS_WINDOWS else "kg",
         "cgo": True,
         "description": "Project knowledge graph (KuzuDB-backed, with code indexer)",
-        "mcp_args": ["handle-server", "--stdio"],
+        "mcp_args": ["server", "--stdio"],
     },
 }
 

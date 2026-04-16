@@ -75,7 +75,7 @@ After installing, add the servers to your MCP client:
     },
     "kg": {
       "command": "/usr/local/bin/kg",
-      "args": ["handle-server", "--stdio"]
+      "args": ["server", "--stdio"]
     }
   }
 }
@@ -92,7 +92,7 @@ Config file locations:
 {
   "mcpServers": {
     "markitdown": { "command": "/usr/local/bin/markitdown-mcp" },
-    "kg":         { "command": "/usr/local/bin/kg", "args": ["handle-server", "--stdio"] }
+    "kg":     { "command": "/usr/local/bin/kg", "args": ["server", "--stdio"] }
   }
 }
 ```

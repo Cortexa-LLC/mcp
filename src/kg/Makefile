@@ -30,7 +30,7 @@ install: build ## Build and install kg to $(INSTALL_DIR)
 	@echo "✅ Installed: $(INSTALL_DIR)/$(BIN_NAME)"
 	@echo ""
 	@echo "Add to your MCP configuration:"
-	@echo '  { "mcpServers": { "kg": { "command": "$(INSTALL_DIR)/$(BIN_NAME)", "args": ["handle-server", "--stdio"] } } }'
+	@echo '  { "mcpServers": { "kg": { "command": "$(INSTALL_DIR)/$(BIN_NAME)", "args": ["server", "--stdio"] } } }'
 
 uninstall: ## Remove kg from $(INSTALL_DIR)
 	@rm -f $(INSTALL_DIR)/$(BIN_NAME)
