@@ -3,7 +3,7 @@
 
 Usage:
     python3 install.py                  # install all MCPs
-    python3 install.py --mcp kg         # install only kg-mcp
+    python3 install.py --mcp kg         # install only kg
     python3 install.py --mcp markitdown # install only markitdown-mcp
     python3 install.py --list           # list available MCPs
     python3 install.py --help
@@ -35,7 +35,7 @@ MCPS = {
     },
     "kg": {
         "src_dir": REPO_ROOT / "src" / "kg",
-        "bin_name": "kg-mcp.exe" if IS_WINDOWS else "kg-mcp",
+        "bin_name": "kg.exe" if IS_WINDOWS else "kg",
         "cgo": True,
         "description": "Project knowledge graph (KuzuDB-backed, with code indexer)",
         "mcp_args": ["handle-server", "--stdio"],

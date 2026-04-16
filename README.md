@@ -15,7 +15,7 @@ only what you need. Released under the [MIT No Attribution License](LICENSE.md).
 graph LR
     Client["MCP Client\n(Claude Code / Claude Desktop)"]
     MD["markitdown-mcp\nDocument converter"]
-    KG["kg-mcp\nKnowledge graph"]
+    KG["kg\nKnowledge graph"]
 
     Client -->|stdio| MD
     Client -->|stdio| KG
@@ -74,7 +74,7 @@ After installing, add the servers to your MCP client:
       "command": "/usr/local/bin/markitdown-mcp"
     },
     "kg": {
-      "command": "/usr/local/bin/kg-mcp",
+      "command": "/usr/local/bin/kg",
       "args": ["handle-server", "--stdio"]
     }
   }
@@ -92,7 +92,7 @@ Config file locations:
 {
   "mcpServers": {
     "markitdown": { "command": "/usr/local/bin/markitdown-mcp" },
-    "kg":         { "command": "/usr/local/bin/kg-mcp", "args": ["handle-server", "--stdio"] }
+    "kg":         { "command": "/usr/local/bin/kg", "args": ["handle-server", "--stdio"] }
   }
 }
 ```

@@ -1,6 +1,6 @@
 # Knowledge Graph — Claude Integration Guide
 
-The `kg-mcp` server gives Claude a persistent, project-scoped memory that survives
+The `kg` server gives Claude a persistent, project-scoped memory that survives
 across sessions. Used well, it eliminates most of the re-discovery work that happens
 at the start of every investigation: re-reading files, re-tracing call chains,
 re-establishing "where is X". This document covers how to configure Claude to use
@@ -13,7 +13,7 @@ the KG effectively, and the patterns that yield the most value.
 ```mermaid
 sequenceDiagram
     participant C as Claude
-    participant KG as kg-mcp
+    participant KG as kg
     participant DB as .ai/knowledge.db
 
     Note over C,DB: Session N — initial investigation
@@ -46,7 +46,7 @@ This alone reduces re-exploration significantly.
 ```markdown
 ## Knowledge Graph
 
-A knowledge graph for this project is available via the `kg-mcp` MCP server.
+A knowledge graph for this project is available via the `kg` MCP server.
 
 **Search before you explore.** Before grepping or reading files, search the KG:
 - `kg__search_knowledge({query: "..."})` — find entities, components, prior findings
@@ -64,7 +64,7 @@ Add write instructions to record findings for future sessions:
 ```markdown
 ## Knowledge Graph
 
-A knowledge graph for this project is available via the `kg-mcp` MCP server.
+A knowledge graph for this project is available via the `kg` MCP server.
 
 ### Before exploring code
 Search the KG first — it may already contain the answer:
@@ -224,7 +224,7 @@ For multi-session refactoring tasks:
 Before starting work on an unfamiliar codebase, index it:
 
 ```bash
-kg-mcp index   # or: kg__index_project from within Claude
+kg index   # or: kg__index_project from within Claude
 ```
 
 Then use the KG for orientation before reading any files:
@@ -238,7 +238,7 @@ kg__query_graph({cypher: "MATCH (f:file) RETURN f.name ORDER BY f.name LIMIT 50"
 **CLAUDE.md instruction:**
 ```markdown
 For new contributors or when starting work in an unfamiliar area:
-1. Run `kg-mcp index` from the project root to index the codebase.
+1. Run `kg index` from the project root to index the codebase.
 2. Use `kg__search_knowledge` to orient before reading files.
 3. Use `kg__get_file_context` to preview a file's contents without opening it.
 ```
@@ -303,7 +303,7 @@ graph LR
     PDF["PDF / DOCX\n(spec, ADR, design doc)"]
     MD["markitdown-mcp\nconvert_to_markdown"]
     Claude["Claude"]
-    KG["kg-mcp\nkg__add_observation"]
+    KG["kg\nkg__add_observation"]
     DB[".ai/knowledge.db"]
 
     PDF -->|local path or URL| MD

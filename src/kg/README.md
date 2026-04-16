@@ -10,7 +10,7 @@ investigation findings across sessions.
 ```mermaid
 graph LR
     Client["MCP Client\n(Claude Code / Claude Desktop)"]
-    Server["kg-mcp\n(this binary)"]
+    Server["kg\n(this binary)"]
     DB[(".ai/knowledge.db\nKuzuDB graph")]
     TS["tree-sitter\n(AST parsing)"]
 
@@ -46,19 +46,19 @@ cd src/kg && make install
 
 ```bash
 cd src/kg
-make build        # → ./kg-mcp
-make install      # build + copy to /usr/local/bin/kg-mcp
+make build        # → ./kg
+make install      # build + copy to /usr/local/bin/kg
 ```
 
 ---
 
-## First-Time Setup: `kg-mcp index`
+## First-Time Setup: `kg index`
 
 Before using the MCP tools, index your project to populate the graph:
 
 ```bash
 cd your-project
-kg-mcp index
+kg index
 ```
 
 ```
@@ -81,32 +81,32 @@ any path matching `.gitignore` or `.claudeignore` patterns.
 
 ## CLI Commands
 
-`kg-mcp` is also a full command-line tool for direct graph operations:
+`kg` is also a full command-line tool for direct graph operations:
 
 ```bash
 # Index / populate
-kg-mcp index                          # scan codebase → .ai/knowledge.db
+kg index                          # scan codebase → .ai/knowledge.db
 
 # Explore
-kg-mcp search "auth middleware"       # keyword search across entities + observations
-kg-mcp stats                          # count of entities, relations, observations
-kg-mcp show <entity-id>               # show one entity with its relations + observations
+kg search "auth middleware"       # keyword search across entities + observations
+kg stats                          # count of entities, relations, observations
+kg show <entity-id>               # show one entity with its relations + observations
 
 # Add knowledge manually
-kg-mcp add entity --name "auth-design" --type "topic"
-kg-mcp add observation <entity-id> "[DECISION] chose JWT because..."
-kg-mcp link <from-id> --rel CALLS <to-id>
+kg add entity --name "auth-design" --type "topic"
+kg add observation <entity-id> "[DECISION] chose JWT because..."
+kg link <from-id> --rel CALLS <to-id>
 
 # Export / maintain
-kg-mcp export                         # export graph to GraphML/JSON
-kg-mcp graph > graph.graphml          # write GraphML to stdout
-kg-mcp gc                             # remove orphaned nodes and observations
+kg export                         # export graph to GraphML/JSON
+kg graph > graph.graphml          # write GraphML to stdout
+kg gc                             # remove orphaned nodes and observations
 
 # MCP server (used by Claude — not normally run manually)
-kg-mcp server --stdio
+kg server --stdio
 
 # Info
-kg-mcp version
+kg version
 ```
 
 See [docs/kg-cli-reference.md](../../docs/kg-cli-reference.md) for the full reference,
@@ -127,7 +127,7 @@ When connected as an MCP server, Claude has access to these tools:
 | `kg__query_graph` | Run a read-only Cypher query against the graph |
 | `kg__get_file_context` | List all entities indexed from a file |
 | `kg__get_preflight_context` | Summarise recent KG activity for agent preflight |
-| `kg__index_project` | Re-index the project (same as `kg-mcp index`) |
+| `kg__index_project` | Re-index the project (same as `kg index`) |
 
 ---
 
@@ -139,7 +139,7 @@ When connected as an MCP server, Claude has access to these tools:
 {
   "mcpServers": {
     "kg": {
-      "command": "/usr/local/bin/kg-mcp",
+      "command": "/usr/local/bin/kg",
       "args": ["server", "--stdio"]
     }
   }
@@ -157,7 +157,7 @@ Config file locations:
 {
   "mcpServers": {
     "kg": {
-      "command": "/usr/local/bin/kg-mcp",
+      "command": "/usr/local/bin/kg",
       "args": ["server", "--stdio"]
     }
   }
@@ -173,7 +173,7 @@ Add this to your project's `CLAUDE.md` to instruct Claude to use the KG:
 ```markdown
 ## Knowledge Graph
 
-This project has a knowledge graph at `.ai/knowledge.db` (populated with `kg-mcp index`).
+This project has a knowledge graph at `.ai/knowledge.db` (populated with `kg index`).
 
 Before reading files or grepping, search the KG:
 - `kg__search_knowledge` — find entities, prior findings, decisions

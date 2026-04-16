@@ -1,6 +1,6 @@
 # kg CLI Reference
 
-`kg-mcp` is both an MCP server and a standalone CLI for managing a project knowledge
+`kg` is both an MCP server and a standalone CLI for managing a project knowledge
 graph. Run it from the project root — it auto-discovers the database location by
 walking up the directory tree to find a `.ai/` directory, a git root, or common
 project markers (`go.mod`, `package.json`, `Cargo.toml`, etc.).
@@ -17,7 +17,7 @@ packages) and their relationships (imports, contains). Run it once to bootstrap,
 then again after large structural changes.
 
 ```bash
-kg-mcp index
+kg index
 ```
 
 Example output:
@@ -76,73 +76,73 @@ Example output:
 
 ## All Commands
 
-### `kg-mcp index`
+### `kg index`
 
 Scan the project and populate the knowledge graph.
 
 ```bash
-kg-mcp index
+kg index
 ```
 
 ---
 
-### `kg-mcp search <query>`
+### `kg search <query>`
 
 Keyword search across all entities and observations. Hybrid search — combines
 exact keyword matching with vector similarity if embeddings are configured.
 
 ```bash
-kg-mcp search "auth middleware"
-kg-mcp search "token expiry"
-kg-mcp search "database connection pool"
+kg search "auth middleware"
+kg search "token expiry"
+kg search "database connection pool"
 ```
 
 ---
 
-### `kg-mcp stats`
+### `kg stats`
 
 Show a count summary of entities, relations, and observations in the graph.
 
 ```bash
-kg-mcp stats
+kg stats
 ```
 
 ---
 
-### `kg-mcp show <entity-id>`
+### `kg show <entity-id>`
 
 Show a single entity with its relations and observations.
 
 ```bash
-kg-mcp show "function:parseToken:internal/auth/token.go"
+kg show "function:parseToken:internal/auth/token.go"
 ```
 
 ---
 
-### `kg-mcp add entity`
+### `kg add entity`
 
 Manually add an entity to the graph. Useful for concepts, topics, or decisions
 that don't exist as named code symbols.
 
 ```bash
-kg-mcp add entity --name "auth-session-design" --type "topic"
-kg-mcp add entity --name "parseToken" --type "function" --summary "Validates JWT and returns claims"
+kg add entity --name "auth-session-design" --type "topic"
+kg add entity --name "parseToken" --type "function" --summary "Validates JWT and returns claims"
 ```
 
 **Entity types:** `function`, `type`, `file`, `module`, `package`, `topic`, `import`, `concept`
 
 ---
 
-### `kg-mcp add observation <entity-id> <content>`
+### `kg add observation <entity-id> <content>`
 
 Attach a note to an existing entity. Observations are the primary way to record
 findings, decisions, and caveats that go beyond what the code itself says.
 
 ```bash
-kg-mcp add observation "topic:auth-session-design" \
+kg add observation "topic:auth-session-design" \
   "[DECISION] Using JWT over session cookies — mobile clients cannot share cookies across subdomains."
 
-kg-mcp add observation "function:parseToken:internal/auth/token.go" \
+kg add observation "function:parseToken:internal/auth/token.go" \
   "[CAVEAT] Does not validate the 'aud' claim — any valid JWT will pass."
 ```
 
@@ -157,13 +157,13 @@ kg-mcp add observation "function:parseToken:internal/auth/token.go" \
 
 ---
 
-### `kg-mcp link <from-id> --rel <RELATION> <to-id>`
+### `kg link <from-id> --rel <RELATION> <to-id>`
 
 Create a directed relationship between two entities.
 
 ```bash
-kg-mcp link "file:cmd/server/main.go" --rel IMPORTS "package:internal/auth"
-kg-mcp link "function:handleRequest" --rel CALLS "function:validateToken"
+kg link "file:cmd/server/main.go" --rel IMPORTS "package:internal/auth"
+kg link "function:handleRequest" --rel CALLS "function:validateToken"
 ```
 
 **Relation types:** `CONTAINS`, `IMPORTS`, `CALLS`, `IMPLEMENTS`, `BELONGS_TO`,
@@ -171,56 +171,56 @@ kg-mcp link "function:handleRequest" --rel CALLS "function:validateToken"
 
 ---
 
-### `kg-mcp export`
+### `kg export`
 
 Export the knowledge graph to GraphML or JSON for use in external tools.
 
 ```bash
-kg-mcp export
+kg export
 ```
 
 ---
 
-### `kg-mcp graph`
+### `kg graph`
 
 Output the current graph in GraphML format (stdout).
 
 ```bash
-kg-mcp graph
-kg-mcp graph > knowledge-graph.graphml
+kg graph
+kg graph > knowledge-graph.graphml
 ```
 
 ---
 
-### `kg-mcp gc`
+### `kg gc`
 
 Remove orphaned or unreferenced nodes, observations, and relations. Run
 occasionally to keep the graph clean after large refactors.
 
 ```bash
-kg-mcp gc
+kg gc
 ```
 
 ---
 
-### `kg-mcp server --stdio`
+### `kg server --stdio`
 
 Start the MCP server over stdio. This is how MCP clients (Claude Code, Claude
-Desktop) communicate with `kg-mcp`. You normally do not run this manually —
+Desktop) communicate with `kg`. You normally do not run this manually —
 the MCP client configuration handles it.
 
 ```bash
-kg-mcp server --stdio
+kg server --stdio
 ```
 
 ---
 
-### `kg-mcp version`
+### `kg version`
 
 Print version, commit, and build info.
 
 ```bash
-kg-mcp version
+kg version
 ```
 
 ---
@@ -230,24 +230,24 @@ kg-mcp version
 ```bash
 # 1. New project — index once to bootstrap the graph
 cd your-project
-kg-mcp index
+kg index
 
 # 2. Orient yourself
-kg-mcp search "entry point"
-kg-mcp search "database layer"
-kg-mcp stats
+kg search "entry point"
+kg search "database layer"
+kg stats
 
 # 3. Record a finding during investigation
-kg-mcp add observation "function:processPayment" \
+kg add observation "function:processPayment" \
   "[INVESTIGATION] Idempotency key checked AFTER the charge is created — window for duplicate charges on retry."
 
 # 4. Record an architectural decision
-kg-mcp add entity --name "payment-idempotency" --type "topic"
-kg-mcp add observation "topic:payment-idempotency" \
+kg add entity --name "payment-idempotency" --type "topic"
+kg add observation "topic:payment-idempotency" \
   "[DECISION] Moving idempotency check to before the Stripe call. See issue #847."
 
 # 5. After a big refactor, re-index
-kg-mcp index
+kg index
 ```
 
 ---
@@ -285,4 +285,4 @@ MATCH (e) WHERE NOT ()-[]->(e) RETURN e.name, e.type LIMIT 20
 | `OPENAI_API_KEY` | Enables OpenAI embeddings for semantic (vector) search |
 | `OLLAMA_HOST` | Enables Ollama embeddings (default: `http://localhost:11434`) |
 
-Embeddings are optional. Without them, `kg-mcp search` uses keyword matching only.
+Embeddings are optional. Without them, `kg search` uses keyword matching only.
