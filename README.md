@@ -106,11 +106,12 @@ Config file locations:
 - **[kg](src/kg/README.md)** — Requires CGO (bundles KuzuDB statically). Each project gets
   its own isolated graph at `.ai/knowledge.db`, auto-discovered by walking up the directory
   tree. Supports OpenAI or Ollama embeddings for semantic search (optional).
-  → [Integration guide & CLAUDE.md patterns](docs/kg-claude-integration.md)
+  → [CLI reference](docs/kg-cli-reference.md) · [Integration guide & CLAUDE.md patterns](docs/kg-claude-integration.md)
 
 ## Docs
 
 | Document | Description |
 |----------|-------------|
+| [docs/kg-cli-reference.md](docs/kg-cli-reference.md) | Full kg CLI reference — all commands, flags, entity types, Cypher examples |
 | [docs/kg-claude-integration.md](docs/kg-claude-integration.md) | KG patterns for CLAUDE.md, reducing re-investigation, decision logging, cross-session checkpointing |
 | [docs/markitdown-claude-integration.md](docs/markitdown-claude-integration.md) | Reading PDFs, DOCX, spreadsheets, and URLs; combining with the KG |
