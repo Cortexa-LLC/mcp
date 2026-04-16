@@ -1,67 +1,81 @@
-# markitdown MCP
+# Cortexa MCP Servers
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that converts documents to Markdown. All core formats are handled natively in Go with no external processes required. OCR support for images and image-heavy PPTX slides requires [Tesseract](https://github.com/tesseract-ocr/tesseract).
+A collection of standalone [Model Context Protocol](https://modelcontextprotocol.io)
+servers written in Go. Each server is independently buildable and installable — pick
+only what you need.
 
-## Supported Formats
+## Available Servers
 
-| Format | Extension(s) | Notes |
-|--------|-------------|-------|
-| HTML | `.html`, `.htm` | Full conversion to Markdown |
-| CSV | `.csv` | Rendered as Markdown table |
-| JSON | `.json` | Pretty-printed in fenced code block |
-| XML | `.xml` | Fenced code block |
-| Plain text | `.txt`, `.md` | Passed through as-is |
-| Word | `.docx` | Headings, bold/italic, lists, tables |
-| Excel | `.xlsx`, `.xls` | All sheets as Markdown tables |
-| PowerPoint | `.pptx` | Slides with headings, lists, tables; embedded images via OCR |
-| PDF | `.pdf` | Text-layer extraction (no OCR) |
-| Images | `.png`, `.jpg`, `.jpeg` | OCR via Tesseract (required) |
+| Server | Description | CGO |
+|--------|-------------|-----|
+| [markitdown](src/markitdown/) | Convert documents to Markdown (HTML, PDF, DOCX, XLSX, PPTX, images) | No |
+| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions | Yes |
 
-## Prerequisites
+```mermaid
+graph LR
+    Client["MCP Client\n(Claude Code / Claude Desktop)"]
+    MD["markitdown-mcp\nDocument converter"]
+    KG["kg-mcp\nKnowledge graph"]
 
-- **Go 1.24+** — [install](https://go.dev/dl/)
-- **Tesseract 5+** *(optional)* — required only for `.png`/`.jpg`/`.jpeg` and PPTX embedded-image OCR
+    Client -->|stdio| MD
+    Client -->|stdio| KG
+```
+
+Each server is a self-contained Go binary with its own `go.mod`. No server depends on
+another.
 
 ## Quick Install
 
 ```bash
-# macOS / Linux
+# Install all servers
 curl -fsSL https://raw.githubusercontent.com/Cortexa-LLC/mcp/main/install.py | python3
 
-# Windows (PowerShell)
-git clone https://github.com/Cortexa-LLC/mcp.git
-cd mcp
-python install.py
+# Install a specific server
+curl -fsSL https://raw.githubusercontent.com/Cortexa-LLC/mcp/main/install.py | python3 - --mcp kg
+curl -fsSL https://raw.githubusercontent.com/Cortexa-LLC/mcp/main/install.py | python3 - --mcp markitdown
+
+# From a clone
+python3 install.py --mcp kg
+python3 install.py --mcp markitdown
+python3 install.py              # installs all
 ```
 
-Or clone and run manually:
+**Install dir defaults** (override with `--prefix DIR` or `INSTALL_DIR=...`):
+
+| Platform | Default |
+|----------|---------|
+| macOS | `/usr/local/bin` |
+| Linux | `/usr/local/bin` (may need `sudo`) |
+| Windows | `%LOCALAPPDATA%\Programs\mcp` |
+
+## Manual Build (per server)
 
 ```bash
-git clone https://github.com/Cortexa-LLC/mcp.git
-cd mcp
-python3 install.py
+cd src/markitdown && make install
+cd src/kg         && make install          # requires a C compiler (CGO)
 ```
 
-## Manual Build
+## Prerequisites
 
-```bash
-cd src/markitdown
-go build -o markitdown-mcp .
-```
-
-The binary has no runtime dependencies beyond an optional `tesseract` on PATH.
+- **Go 1.24+** — [install](https://go.dev/dl/)
+- **kg only**: C compiler — Xcode CLT on macOS (`xcode-select --install`), gcc/clang on Linux
+- **markitdown OCR** *(optional)*: Tesseract 5+ (`brew install tesseract`)
 
 ## MCP Configuration
 
-After building, add the server to your MCP client configuration.
+After installing, add the servers to your MCP client:
 
-### Claude Desktop (`claude_desktop_config.json`)
+### Claude Desktop
 
 ```json
 {
   "mcpServers": {
     "markitdown": {
-      "command": "/absolute/path/to/markitdown-mcp"
+      "command": "/usr/local/bin/markitdown-mcp"
+    },
+    "kg": {
+      "command": "/usr/local/bin/kg-mcp",
+      "args": ["handle-server", "--stdio"]
     }
   }
 }
@@ -72,86 +86,22 @@ Config file locations:
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-### Claude Code (`.mcp.json` in your project)
+### Claude Code (`.mcp.json` in project root)
 
 ```json
 {
   "mcpServers": {
-    "markitdown": {
-      "command": "/absolute/path/to/markitdown-mcp"
-    }
+    "markitdown": { "command": "/usr/local/bin/markitdown-mcp" },
+    "kg":         { "command": "/usr/local/bin/kg-mcp", "args": ["handle-server", "--stdio"] }
   }
 }
 ```
 
-## Available Tools
+## Server Details
 
-| Tool | Description |
-|------|-------------|
-| `convert_to_markdown` | Convert a local file (absolute path) or `http://`/`https://` URL to Markdown |
-| `get_conversion_info` | List supported formats and active configuration |
+- **[markitdown](src/markitdown/README.md)** — No CGO, no system dependencies for core formats.
+  OCR for images requires Tesseract (optional, degrades gracefully).
 
-## Configuration
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `MARKITDOWN_MAX_FILE_BYTES` | `52428800` (50 MiB) | Maximum accepted file size in bytes |
-
-Example — raise limit to 200 MiB:
-
-```json
-{
-  "mcpServers": {
-    "markitdown": {
-      "command": "/path/to/markitdown-mcp",
-      "env": {
-        "MARKITDOWN_MAX_FILE_BYTES": "209715200"
-      }
-    }
-  }
-}
-```
-
-## Tesseract Installation
-
-OCR is enabled automatically when `tesseract` is on PATH. The server degrades gracefully when it is absent — image files return a descriptive error, all other formats are unaffected.
-
-| Platform | Command |
-|----------|---------|
-| macOS | `brew install tesseract` |
-| Ubuntu / Debian | `sudo apt-get install tesseract-ocr` |
-| Fedora / RHEL | `sudo dnf install tesseract` |
-| Windows | `choco install tesseract` or [download installer](https://github.com/UB-Mannheim/tesseract/wiki) |
-
-For languages other than English, install the language packs (e.g. `brew install tesseract-lang` on macOS).
-
-## Performance
-
-The server is a compiled Go binary with no runtime to start up — no JVM, no Python interpreter, no dependency loading. This means near-zero startup overhead compared to Python-based alternatives like the original `markitdown`.
-
-| Format | Speed | Notes |
-|--------|-------|-------|
-| HTML, CSV, JSON, XML, TXT, MD | Very fast | File read + in-memory parsing, sub-millisecond for typical files |
-| DOCX, XLSX, XLS, PPTX | Fast | Native Go ZIP parsing, no subprocess |
-| PDF | Moderate | Go PDF library; depends on document complexity |
-| PNG, JPG, JPEG | Tesseract-bound | OCR is a subprocess call; Go adds no overhead |
-| PPTX with embedded images | Tesseract-bound | One OCR call per embedded image |
-| HTTP/HTTPS URLs | Network-bound | Go's HTTP client is efficient but can't speed up a slow origin |
-
-## Development
-
-```bash
-cd src/markitdown
-
-# Run tests
-make test
-
-# Run tests with coverage
-go test ./... -coverprofile=cover.out && go tool cover -func=cover.out
-
-# Lint
-golangci-lint run ./...
-
-# Build
-make build
-```
+- **[kg](src/kg/README.md)** — Requires CGO (bundles KuzuDB statically). Each project gets
+  its own isolated graph at `.ai/knowledge.db`, auto-discovered by walking up the directory
+  tree. Supports OpenAI or Ollama embeddings for semantic search (optional).
