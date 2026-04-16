@@ -25,7 +25,7 @@ var addEntityCmd = &cobra.Command{
 			return err
 		}
 		if addEntitySummary != "" {
-			obs, err := store.CreateObservation(entity.ID, addEntitySummary, "")
+			obs, err := store.CreateObservation(entity.ID, addEntitySummary, projectID)
 			if err != nil {
 				return err
 			}
@@ -42,13 +42,13 @@ var addObservationCmd = &cobra.Command{
 	Short: "Add an observation to an entity",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		store, _, err := openStore()
+		store, projectID, err := openStore()
 		if err != nil {
 			return err
 		}
 		defer store.Close()
 
-		obs, err := store.CreateObservation(args[0], args[1], "")
+		obs, err := store.CreateObservation(args[0], args[1], projectID)
 		if err != nil {
 			return err
 		}
