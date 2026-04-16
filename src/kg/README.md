@@ -151,7 +151,12 @@ Config file locations:
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-### Claude Code (`.mcp.json` in project root)
+### Claude Code (`.mcp.json` in project root) — Recommended
+
+Place `.mcp.json` in each project root. Claude Code spawns `kg` with that directory
+as the working directory, so `kg` opens the correct `.ai/knowledge.db` for that
+project. Using a global config (`~/.claude/settings.json`) also works but relies on
+Claude Code setting the right CWD — project-local is explicit and unambiguous.
 
 ```json
 {
@@ -163,6 +168,9 @@ Config file locations:
   }
 }
 ```
+
+Add `.mcp.json` to `.gitignore` if you prefer not to commit it, or commit it to
+share the configuration with your team.
 
 ---
 

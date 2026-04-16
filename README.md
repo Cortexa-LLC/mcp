@@ -88,14 +88,21 @@ Config file locations:
 
 ### Claude Code (`.mcp.json` in project root)
 
+**Recommended for `kg`** — place `.mcp.json` in each project root so Claude Code
+spawns `kg` with the correct working directory, ensuring it opens that project's
+`.ai/knowledge.db` and not another project's graph.
+
 ```json
 {
   "mcpServers": {
     "markitdown": { "command": "/usr/local/bin/markitdown-mcp" },
-    "kg":     { "command": "/usr/local/bin/kg", "args": ["server", "--stdio"] }
+    "kg":         { "command": "/usr/local/bin/kg", "args": ["server", "--stdio"] }
   }
 }
 ```
+
+`markitdown` is stateless and can be configured globally in `~/.claude/settings.json`
+if preferred.
 
 ## Server Details
 
