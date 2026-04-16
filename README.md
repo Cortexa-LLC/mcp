@@ -1,8 +1,8 @@
-# Cortexa MCP Servers
+# MCP Servers
 
 A collection of standalone [Model Context Protocol](https://modelcontextprotocol.io)
 servers written in Go. Each server is independently buildable and installable — pick
-only what you need.
+only what you need. Released under the [MIT No Attribution License](LICENSE.md).
 
 ## Available Servers
 
