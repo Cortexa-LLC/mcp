@@ -22,19 +22,11 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(addEntityCmd)
-	addCmd.AddCommand(addObservationCmd)
-	rootCmd.AddCommand(addCmd)
-	rootCmd.AddCommand(searchCmd)
-	rootCmd.AddCommand(showCmd)
-	rootCmd.AddCommand(linkCmd)
-	rootCmd.AddCommand(indexCmd)
-	rootCmd.AddCommand(serverCmd)
+	// Commands without their own init() registration:
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(gcCmd)
 	rootCmd.AddCommand(embedCmd)
 	rootCmd.AddCommand(graphCmd)
-	rootCmd.AddCommand(statsCmd)
 	rootCmd.AddCommand(perfCmd)
 	rootCmd.AddCommand(versionCmd)
 }

@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import os
 import platform
 import shutil
@@ -144,14 +145,32 @@ def build_mcp(name: str, cfg: dict) -> Path:
     cgo_env = {"CGO_ENABLED": "1"} if cfg["cgo"] else {"CGO_ENABLED": "0"}
     env = {**os.environ, **cgo_env}
 
-    info(f"Building {bin_name}...")
+    # Collect version stamp vars (best-effort; fall back to defaults if git unavailable).
+    def _git(args: list[str], fallback: str) -> str:
+        try:
+            r = subprocess.run(["git"] + args, cwd=src_dir, capture_output=True, text=True)
+            return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else fallback
+        except FileNotFoundError:
+            return fallback
+
+    version    = _git(["describe", "--tags", "--always", "--dirty"], "dev")
+    commit     = _git(["rev-parse", "--short", "HEAD"], "unknown")
+    build_time = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    ldflags = (
+        f"-s -w"
+        f" -X main.Version={version}"
+        f" -X main.Commit={commit}"
+        f" -X main.BuildTime={build_time}"
+    )
+
+    info(f"Building {bin_name} ({version})...")
     try:
         subprocess.run(
             ["go", "mod", "tidy", "-e"],
             cwd=src_dir, env=env, check=True, capture_output=True, text=True,
         )
         subprocess.run(
-            ["go", "build", "-ldflags=-s -w", f"-o={bin_name}", "."],
+            ["go", "build", f"-ldflags={ldflags}", f"-o={bin_name}", "."],
             cwd=src_dir, env=env, check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
