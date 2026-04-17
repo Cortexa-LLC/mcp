@@ -35,10 +35,11 @@ var alwaysSkipDirs = map[string]bool{
 
 // Indexer scans source files and populates the knowledge graph
 type Indexer struct {
-	store     *Store
-	projectID string
-	root      string
-	ignorer   *gitignore.GitIgnore
+	store       *Store
+	projectID   string
+	root        string
+	ignorer     *gitignore.GitIgnore
+	scopeFilter *ScopeConfig // Optional scope filter for multi-DB indexing
 }
 
 // IndexStats tracks indexing progress
@@ -105,11 +106,18 @@ func NewIndexer(store *Store, projectID, root string) (*Indexer, error) {
 	}
 
 	return &Indexer{
-		store:     store,
-		projectID: projectID,
-		root:      root,
-		ignorer:   ignorer,
+		store:       store,
+		projectID:   projectID,
+		root:        root,
+		ignorer:     ignorer,
+		scopeFilter: nil,
 	}, nil
+}
+
+// SetScopeFilter sets the scope filter for this indexer.
+// When set, only files matching the scope's patterns will be indexed.
+func (idx *Indexer) SetScopeFilter(scope *ScopeConfig) {
+	idx.scopeFilter = scope
 }
 
 // readLinesFromFile reads all lines from a file
@@ -218,6 +226,11 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 
 		// Check if ignored
 		if idx.ignorer.MatchesPath(relPath) {
+			return nil
+		}
+
+		// Check scope filter if set
+		if idx.scopeFilter != nil && !idx.scopeFilter.ShouldIncludePath(relPath) {
 			return nil
 		}
 

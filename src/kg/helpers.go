@@ -85,12 +85,33 @@ func openStoreRO() (*knowledge.Store, string, error) {
 
 
 func openStoreMode(readOnly bool) (*knowledge.Store, string, error) {
+	return openStoreModeWithScope(readOnly, "")
+}
+
+// openStoreModeWithScope opens a store for a specific scope.
+// If scopeName is empty, uses legacy single-DB mode (knowledge.db).
+func openStoreModeWithScope(readOnly bool, scopeName string) (*knowledge.Store, string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, "", fmt.Errorf("get cwd: %w", err)
 	}
 	root := findProjectRoot(cwd)
-	dbPath := filepath.Join(root, ".ai", "knowledge.db")
+	aiDir := filepath.Join(root, ".ai")
+
+	// Determine database path
+	var dbPath string
+	if scopeName != "" {
+		// Load scope config to get database name
+		cfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
+		if err != nil {
+			return nil, "", fmt.Errorf("load scope %s: %w", scopeName, err)
+		}
+		dbPath = filepath.Join(aiDir, cfg.Database)
+	} else {
+		// Legacy mode: use knowledge.db
+		dbPath = filepath.Join(aiDir, "knowledge.db")
+	}
+
 	var store *knowledge.Store
 	if readOnly {
 		store, err = knowledge.OpenStoreReadOnly(dbPath)
