@@ -146,8 +146,8 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 
 	// Second pass: index agent execution logs from .beads/tasks/
 	fmt.Println("📋 Indexing execution logs...")
+	execStart := time.Now()
 	logStats, err := knowledge.IndexExecutionLogs(store, projectID, root)
-	logsDur := time.Since(start) - codesDur
 	if err != nil {
 		fmt.Printf("Warning: execution log indexing failed: %v\n", err)
 	} else {
@@ -157,7 +157,25 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 			fmt.Printf("   Logs skipped:      %d\n", logStats.LogsSkipped)
 		}
 		fmt.Printf("   Observations:      %d\n", logStats.Observations)
-		fmt.Printf("   Duration:          %.3fs\n", logsDur.Seconds())
+		fmt.Printf("   Duration:          %.3fs\n", time.Since(execStart).Seconds())
+	}
+
+	// Third pass: index application logs (Spring Boot, Android, iOS, etc.)
+	fmt.Println("📱 Indexing application logs...")
+	appStart := time.Now()
+	appStats, err := knowledge.IndexApplicationLogs(store, projectID, root, scopeConfig)
+	if err != nil {
+		fmt.Printf("Warning: application log indexing failed: %v\n", err)
+	} else {
+		fmt.Printf("   Files scanned:     %d\n", appStats.FilesScanned)
+		fmt.Printf("   Logs matched:      %d\n", appStats.LogsMatched)
+		fmt.Printf("   Logs indexed:      %d\n", appStats.LogsIndexed)
+		if appStats.LogsSkipped > 0 {
+			fmt.Printf("   Logs skipped:      %d\n", appStats.LogsSkipped)
+		}
+		fmt.Printf("   Entities:          %d\n", appStats.Entities)
+		fmt.Printf("   Observations:      %d\n", appStats.Observations)
+		fmt.Printf("   Duration:          %.3fs\n", time.Since(appStart).Seconds())
 	}
 
 	fmt.Printf("✅ Total duration: %.3fs\n", time.Since(start).Seconds())

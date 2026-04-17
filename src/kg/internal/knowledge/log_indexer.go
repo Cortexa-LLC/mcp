@@ -203,6 +203,14 @@ type LogIndexStats struct {
 // indexes each task run as an "exec:{folderName}" topic entity with structured
 // observations. Already-indexed entities are skipped (idempotent).
 //
+// SCOPE: This function ONLY indexes agent execution logs from .beads/tasks/.
+// It does NOT index:
+//   - Application logs (crash logs, system logs, server logs)
+//   - Build logs (Xcode build output, compiler warnings)
+//   - Test logs (unit test results, XCTest output)
+//   - CI/CD logs
+//   - Any other general log files in the project
+//
 // All new entities and observations are collected in memory first, then written
 // in two bulk COPY FROM JSON passes to avoid per-row Kuzu round-trips.
 func IndexExecutionLogs(store *Store, projectID, projectRoot string) (LogIndexStats, error) {
