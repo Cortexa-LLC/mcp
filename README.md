@@ -9,7 +9,7 @@ only what you need. Released under the [MIT No Attribution License](LICENSE.md).
 | Server | Description | CGO |
 |--------|-------------|-----|
 | [markitdown](src/markitdown/) | Convert documents to Markdown (HTML, PDF, DOCX, XLSX, PPTX, images) | No |
-| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions | Yes |
+| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions. Supports multi-scope graphs for monorepos. | Yes |
 
 ```mermaid
 graph LR

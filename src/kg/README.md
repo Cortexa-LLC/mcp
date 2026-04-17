@@ -7,6 +7,8 @@ investigation findings across sessions.
 
 ## Architecture
 
+### Single-Scope Projects
+
 ```mermaid
 graph LR
     Client["MCP Client\n(Claude Code / Claude Desktop)"]
@@ -22,6 +24,31 @@ graph LR
 Each project gets its own isolated graph at `.ai/knowledge.db`, auto-discovered by
 walking up the directory tree to find a `.ai/` directory, git root, or common project
 markers (`go.mod`, `package.json`, etc.).
+
+### Multi-Scope Monorepos
+
+For large monorepos, kg supports **scoped knowledge graphs** with automatic federation:
+
+```mermaid
+graph TB
+    Client["MCP Client"] --> Server["kg MCP Server"]
+    Server --> FS["FederatedStore"]
+    FS --> Platform[".ai/platform.db\n(shared)"]
+    FS --> TeamA[".ai/team-a.db\n(domain)"]
+    
+    subgraph "Scope Configuration"
+        ScopeA[".ai/scope/platform.json"]
+        ScopeB[".ai/scope/team-a.json"]
+    end
+    
+    ScopeA -.defines.-> Platform
+    ScopeB -.defines.-> TeamA
+```
+
+- Each scope defines which files/modules to index into its database
+- Scopes can layer on top of others (e.g., `team-a` includes `platform`)  
+- Queries automatically federate across layers with priority-based merging
+- See [docs/kg-scopes.md](../../docs/kg-scopes.md) for configuration
 
 ---
 
@@ -85,12 +112,20 @@ any path matching `.gitignore` or `.claudeignore` patterns.
 
 ```bash
 # Index / populate
-kg index                          # scan codebase → .ai/knowledge.db
+kg index                          # scan codebase → default scope or .ai/knowledge.db
+kg index --scope team-a           # index specific scope
+kg index --all                    # index all defined scopes
 
 # Explore
-kg search "auth middleware"       # keyword search across entities + observations
+kg search "auth middleware"       # search default scope + layers
+kg search "api" --scope team-a    # search specific scope + layers
+kg search "cache" --all           # search all scopes independently
 kg stats                          # count of entities, relations, observations
 kg show <entity-id>               # show one entity with its relations + observations
+
+# Scope management (monorepos)
+kg config list-scopes             # list all defined scopes
+kg config set-default-scope team-a # set default scope
 
 # Add knowledge manually
 kg add entity --name "auth-design" --type "topic"

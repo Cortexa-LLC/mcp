@@ -34,6 +34,25 @@ The KG is a force-multiplier on repeated work in the same codebase. The first ag
 to investigate a component pays the full exploration cost. Every subsequent agent
 starts from those findings.
 
+### Multi-Scope KGs (Monorepos)
+
+For large monorepos, kg supports **scoped knowledge graphs** where platform/shared code
+and team-specific domains maintain separate databases with automatic federation:
+
+```mermaid
+graph LR
+    A[Claude Query] --> B[kg MCP Server]
+    B --> C[team-a.db]
+    B --> D[platform.db]
+    C --> E[Merged Results]
+    D --> E
+    E --> A
+```
+
+See [kg-scopes.md](kg-scopes.md) for configuration details. When a default scope is set,
+the MCP server automatically queries both the team's database and any platform layers,
+returning unified results with team-specific knowledge taking precedence.
+
 ---
 
 ## CLAUDE.md Configuration

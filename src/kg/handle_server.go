@@ -22,12 +22,29 @@ func handleServer(cmd *cobra.Command) {
 		os.Exit(1)
 	}
 	projectRoot := findProjectRoot(cwd)
-	dbPath := filepath.Join(projectRoot, ".ai", "knowledge.db")
+	aiDir := filepath.Join(projectRoot, ".ai")
 	projectID := filepath.Base(projectRoot)
+
+	// Determine which scope to use for the MCP server
+	// Priority: default scope > legacy mode (knowledge.db)
+	var scopeConfig *knowledge.ScopeConfig
+	defaultScope, err := knowledge.GetDefaultScope(aiDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kg server: get default scope: %v\n", err)
+		os.Exit(1)
+	}
+
+	if defaultScope != "" {
+		scopeConfig, err = knowledge.LoadScopeConfig(aiDir, defaultScope)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kg server: load scope %s: %v\n", defaultScope, err)
+			os.Exit(1)
+		}
+	}
 
 	// Each MCP tool call opens the DB, operates, and closes it — no lock is
 	// held between calls, so `kg index` and other CLI commands can run freely.
-	if err := knowledge.RunMCPServer(dbPath, projectID, projectRoot); err != nil {
+	if err := knowledge.RunMCPServer(aiDir, scopeConfig, projectID, projectRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "kg server: MCP server error: %v\n", err)
 		os.Exit(2)
 	}

@@ -12,12 +12,21 @@ import (
 //
 // Open-use-close pattern: each tool handler opens the database, executes its
 // operation, and closes the database before returning.  No connection is held
-// between calls, so `kg index` (and any other CLI command) can run at any time
+// between calls, so `kg index` (and any other CLI commands) can run at any time
 // without hitting a "database is locked" error.
 //
 // Reads open in read-only mode (multiple concurrent readers allowed).
 // Writes open in write mode (exclusive, but released immediately after the call).
-func RunMCPServer(dbPath, projectID, projectRoot string) error {
+//
+// If scopeConfig is provided and has layers, reads use FederatedStore for
+// cross-layer queries. Writes always go to the primary scope's database.
+// KeywordSearcher interface for search operations (implemented by both Store and FederatedStore)
+type KeywordSearcher interface {
+	KeywordSearch(projectID, query string, limit int) ([]*SearchResult, error)
+	HybridSearch(projectID, query string, queryEmbedding []float32, config SearchConfig) ([]*SearchResult, error)
+}
+
+func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string) error {
 	// jsonSchema is a helper to build a minimal JSON Schema object descriptor.
 	jsonSchema := func(props map[string]string, required ...string) map[string]interface{} {
 		properties := map[string]interface{}{}
@@ -76,6 +85,16 @@ func RunMCPServer(dbPath, projectID, projectRoot string) error {
 		},
 	}
 
+	// Determine database path (legacy or scoped)
+	var dbPath string
+	useFederation := false
+	if scopeConfig != nil {
+		dbPath = fmt.Sprintf("%s/%s", aiDir, scopeConfig.Database)
+		useFederation = len(scopeConfig.Layers) > 0
+	} else {
+		dbPath = fmt.Sprintf("%s/knowledge.db", aiDir)
+	}
+
 	// withRO opens the DB in read-only mode, runs fn, then closes.
 	withRO := func(fn func(*Store) (any, error)) (any, error) {
 		s, err := OpenStoreReadOnly(dbPath)
@@ -96,9 +115,29 @@ func RunMCPServer(dbPath, projectID, projectRoot string) error {
 		return fn(s)
 	}
 
+	// withSearch opens the appropriate store for search operations.
+	// Uses federated store if scope has layers, otherwise single store.
+	withSearch := func(fn func(KeywordSearcher) (any, error)) (any, error) {
+		if useFederation {
+			fs, err := OpenFederatedStore(aiDir, scopeConfig, true)
+			if err != nil {
+				return nil, fmt.Errorf("open federated store: %w", err)
+			}
+			defer fs.Close()
+			return fn(fs)
+		}
+
+		s, err := OpenStoreReadOnly(dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("open store: %w", err)
+		}
+		defer s.Close()
+		return fn(s)
+	}
+
 	handlers := map[string]mcp.ToolHandler{
 		"get_preflight_context": func(req *mcp.ToolCallRequest) (any, error) {
-			return withRO(func(s *Store) (any, error) {
+			return withSearch(func(s KeywordSearcher) (any, error) {
 				task, _ := req.Arguments["task"].(string)
 				entities, err := s.KeywordSearch(projectID, task, 16)
 				if err != nil {
@@ -115,7 +154,7 @@ func RunMCPServer(dbPath, projectID, projectRoot string) error {
 		},
 
 		"search_knowledge": func(req *mcp.ToolCallRequest) (any, error) {
-			return withRO(func(s *Store) (any, error) {
+			return withSearch(func(s KeywordSearcher) (any, error) {
 				q, _ := req.Arguments["query"].(string)
 				lim, _ := req.Arguments["limit"].(float64)
 				if lim == 0 {
