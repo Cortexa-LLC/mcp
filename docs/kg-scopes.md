@@ -110,12 +110,17 @@ kg index --all
 # Search in default scope (+ its layers)
 kg search "authentication"
 
-# Search specific scope
+# Search specific scope (+ its layers if defined)
 kg search "authentication" --scope team-a
 
-# Search across all scopes
+# Search across all scopes (independent queries, no layer federation)
 kg search "authentication" --all
 ```
+
+**Note:** When searching a scope with layers, results are automatically federated:
+- Queries run against the scope's database AND all layer databases
+- Results are merged with priority (higher layers override lower)
+- Duplicate entities (same ID) are deduplicated, keeping the highest-priority version
 
 ## Backward Compatibility
 
