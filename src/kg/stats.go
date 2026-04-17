@@ -63,19 +63,22 @@ By default, shows stats for the default scope. Use --scope to specify a differen
 		}
 		defer store.Close()
 
-		entities, err := store.ListEntities(projectID, "")
+		// Use efficient count queries instead of iterating all entities
+		entityCount, err := store.CountEntities(projectID)
 		if err != nil {
 			return err
 		}
-		entityCount := len(entities)
-		relationCount := 0
-		observationCount := 0
-		for _, e := range entities {
-			rels, _ := store.GetRelations(e.ID, projectID)
-			relationCount += len(rels)
-			obs, _ := store.GetObservations(e.ID, projectID)
-			observationCount += len(obs)
+
+		relationCount, err := store.CountRelations(projectID)
+		if err != nil {
+			return err
 		}
+
+		observationCount, err := store.CountObservations(projectID)
+		if err != nil {
+			return err
+		}
+
 		fmt.Printf("Entities: %d\n", entityCount)
 		fmt.Printf("Relations: %d\n", relationCount)
 		fmt.Printf("Observations: %d\n", observationCount)

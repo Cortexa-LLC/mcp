@@ -133,3 +133,77 @@ func (s *Store) queryParams(stmt string, params map[string]any) (*kuzu.QueryResu
 	}
 	return result, nil
 }
+
+// CountEntities returns the total number of entities for a project
+func (s *Store) CountEntities(projectID string) (int, error) {
+	query := `MATCH (e:Entity {project_id: $project_id}) RETURN count(*) AS count`
+	result, err := s.queryParams(query, map[string]any{"project_id": projectID})
+	if err != nil {
+		return 0, err
+	}
+	defer result.Close()
+
+	if result.HasNext() {
+		row, err := result.Next()
+		if err != nil {
+			return 0, err
+		}
+		countVal, _ := row.GetValue(0)
+		count, _ := countVal.(int64)
+		return int(count), nil
+	}
+	return 0, nil
+}
+
+// CountRelations returns the total number of relations for a project
+func (s *Store) CountRelations(projectID string) (int, error) {
+	// Count all typed relations
+	totalCount := 0
+	for _, relType := range AllowedRelTypes {
+		query := fmt.Sprintf(`
+			MATCH (from:Entity {project_id: $project_id})-[r:%s]->(to:Entity {project_id: $project_id})
+			RETURN count(*) AS count
+		`, relType)
+		result, err := s.queryParams(query, map[string]any{"project_id": projectID})
+		if err != nil {
+			return 0, err
+		}
+
+		if result.HasNext() {
+			row, err := result.Next()
+			if err != nil {
+				result.Close()
+				return 0, err
+			}
+			countVal, _ := row.GetValue(0)
+			count, _ := countVal.(int64)
+			totalCount += int(count)
+		}
+		result.Close()
+	}
+	return totalCount, nil
+}
+
+// CountObservations returns the total number of observations for a project
+func (s *Store) CountObservations(projectID string) (int, error) {
+	query := `
+		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
+		RETURN count(*) AS count
+	`
+	result, err := s.queryParams(query, map[string]any{"project_id": projectID})
+	if err != nil {
+		return 0, err
+	}
+	defer result.Close()
+
+	if result.HasNext() {
+		row, err := result.Next()
+		if err != nil {
+			return 0, err
+		}
+		countVal, _ := row.GetValue(0)
+		count, _ := countVal.(int64)
+		return int(count), nil
+	}
+	return 0, nil
+}
