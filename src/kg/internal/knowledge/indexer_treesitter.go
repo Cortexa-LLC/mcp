@@ -650,4 +650,3 @@ func extractSwiftImports(node *sitter.Node, src []byte) []string {
 	}
 	return nil
 }
-

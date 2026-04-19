@@ -47,14 +47,16 @@ var defaultExcludeDirs = []string{
 // DIFFERENTIATION BETWEEN .log FILES:
 //
 // Plugins use a two-stage matching strategy:
-//   Stage 1: Check file extension/filename (fast)
-//   Stage 2: Check header content patterns (precise)
+//
+//	Stage 1: Check file extension/filename (fast)
+//	Stage 2: Check header content patterns (precise)
 //
 // Example with multiple .log files:
-//   application.log → SpringBootLogPlugin (header: "--- [main]")
-//   logcat.log → AndroidLogcatPlugin (filename: "logcat")
-//   crash_2024.log → iOSCrashLogPlugin (header: "Incident Identifier")
-//   nginx.log → nil (no plugin matches, skipped)
+//
+//	application.log → SpringBootLogPlugin (header: "--- [main]")
+//	logcat.log → AndroidLogcatPlugin (filename: "logcat")
+//	crash_2024.log → iOSCrashLogPlugin (header: "Incident Identifier")
+//	nginx.log → nil (no plugin matches, skipped)
 //
 // IDEMPOTENCY:
 //

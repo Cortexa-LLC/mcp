@@ -366,9 +366,9 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 	eenc := json.NewEncoder(ef)
 	for _, o := range obs {
 		if err := nenc.Encode(map[string]string{
-			"id":        o.id,
-			"entity_id": o.entityID,
-			"content":   o.content,
+			"id":         o.id,
+			"entity_id":  o.entityID,
+			"content":    o.content,
 			"created_at": o.created.UTC().Format(time.RFC3339),
 		}); err != nil {
 			nf.Close()

@@ -16,21 +16,21 @@ import (
 // walking into directories that can have thousands of files (node_modules) or
 // that contain binary/runtime data rather than source (.git, .claude).
 var alwaysSkipDirs = map[string]bool{
-	".git":         true,
-	"node_modules": true,
-	"vendor":       true,
-	".claude":      true,
-	".beads":       true,
-	"dist":         true,
-	"build":        true,
-	".build":       true,
-	"__pycache__":  true,
-	".mypy_cache":  true,
+	".git":          true,
+	"node_modules":  true,
+	"vendor":        true,
+	".claude":       true,
+	".beads":        true,
+	"dist":          true,
+	"build":         true,
+	".build":        true,
+	"__pycache__":   true,
+	".mypy_cache":   true,
 	".pytest_cache": true,
-	".next":        true,
-	".nuxt":        true,
-	"target":       true, // Rust/Maven build output
-	"coverage":     true,
+	".next":         true,
+	".nuxt":         true,
+	"target":        true, // Rust/Maven build output
+	"coverage":      true,
 }
 
 // Indexer scans source files and populates the knowledge graph

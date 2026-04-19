@@ -24,9 +24,10 @@ import (
 // order in the registry matters. Register more specific plugins before generic ones.
 //
 // Example differentiation for .log files:
-//   application.log → Spring Boot (header contains "--- [")
-//   logcat.log → Android (filename contains "logcat")
-//   crash.log → iOS (header contains "Incident Identifier")
+//
+//	application.log → Spring Boot (header contains "--- [")
+//	logcat.log → Android (filename contains "logcat")
+//	crash.log → iOS (header contains "Incident Identifier")
 //
 // See docs/kg-log-plugins.md for detailed guidance on creating plugins.
 type LogPlugin interface {
@@ -79,15 +80,15 @@ type LogParseResult struct {
 
 // LogEntity represents an entity extracted from logs
 type LogEntity struct {
-	Name        string            // Entity name (e.g., "error:NullPointerException:2024-01-15")
-	Type        string            // Entity type (e.g., "error", "crash", "warning")
-	Metadata    map[string]string // Additional metadata
-	Timestamp   time.Time         // When this occurred
-	Severity    string            // "error", "warning", "info", "debug"
-	SourceFile  string            // Source file if known (for linking)
-	SourceLine  int               // Source line if known
-	Message     string            // Human-readable message
-	StackTrace  []string          // Stack trace if available
+	Name       string            // Entity name (e.g., "error:NullPointerException:2024-01-15")
+	Type       string            // Entity type (e.g., "error", "crash", "warning")
+	Metadata   map[string]string // Additional metadata
+	Timestamp  time.Time         // When this occurred
+	Severity   string            // "error", "warning", "info", "debug"
+	SourceFile string            // Source file if known (for linking)
+	SourceLine int               // Source line if known
+	Message    string            // Human-readable message
+	StackTrace []string          // Stack trace if available
 }
 
 // LogObservation represents an observation extracted from logs
@@ -133,14 +134,14 @@ type LogPluginRegistry struct {
 // be registered before more generic ones.
 //
 // Current order:
-//   1. iOSCrashLogPlugin - very specific (.crash, .ips extensions)
-//   2. AndroidLogcatPlugin - specific (filename and header patterns)
-//   3. SpringBootLogPlugin - specific header pattern (--- [)
+//  1. iOSCrashLogPlugin - very specific (.crash, .ips extensions)
+//  2. AndroidLogcatPlugin - specific (filename and header patterns)
+//  3. SpringBootLogPlugin - specific header pattern (--- [)
 func NewLogPluginRegistry() *LogPluginRegistry {
 	return &LogPluginRegistry{
 		plugins: []LogPlugin{
-			// &IOSCrashLogPlugin{},    // TODO: iOS crash log plugin
-			// &AndroidLogcatPlugin{},  // TODO: Android logcat plugin
+			&IOSCrashLogPlugin{},   // Most specific (unique extensions)
+			&AndroidLogcatPlugin{}, // Specific filename/header patterns
 			&SpringBootLogPlugin{}, // Specific header pattern
 			// Add custom plugins here, in order of specificity
 		},
@@ -162,11 +163,12 @@ func (r *LogPluginRegistry) RegisterPlugin(plugin LogPlugin) {
 // should be registered first to ensure they get priority over generic ones.
 //
 // Example:
-//   app.log with Spring Boot format:
-//     1. iOSCrashLogPlugin.Matches() → false (no "Incident Identifier")
-//     2. AndroidLogcatPlugin.Matches() → false (no "AndroidRuntime")
-//     3. SpringBootLogPlugin.Matches() → true (found "--- [" pattern)
-//     Returns: SpringBootLogPlugin
+//
+//	app.log with Spring Boot format:
+//	  1. iOSCrashLogPlugin.Matches() → false (no "Incident Identifier")
+//	  2. AndroidLogcatPlugin.Matches() → false (no "AndroidRuntime")
+//	  3. SpringBootLogPlugin.Matches() → true (found "--- [" pattern)
+//	  Returns: SpringBootLogPlugin
 func (r *LogPluginRegistry) FindPlugin(filePath string, header []byte) LogPlugin {
 	for _, plugin := range r.plugins {
 		if plugin.Matches(filePath, header) {
