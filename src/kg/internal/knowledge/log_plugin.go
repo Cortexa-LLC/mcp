@@ -139,9 +139,9 @@ type LogPluginRegistry struct {
 func NewLogPluginRegistry() *LogPluginRegistry {
 	return &LogPluginRegistry{
 		plugins: []LogPlugin{
-			&iOSCrashLogPlugin{},    // Most specific (unique extensions)
-			&AndroidLogcatPlugin{},  // Specific filename/header patterns
-			&SpringBootLogPlugin{},  // Specific header pattern
+			// &IOSCrashLogPlugin{},    // TODO: iOS crash log plugin
+			// &AndroidLogcatPlugin{},  // TODO: Android logcat plugin
+			&SpringBootLogPlugin{}, // Specific header pattern
 			// Add custom plugins here, in order of specificity
 		},
 	}

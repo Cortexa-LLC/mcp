@@ -87,7 +87,11 @@ func IndexApplicationLogs(store *Store, projectID, projectRoot string, scopeFilt
 		if err != nil {
 			break
 		}
-		name := row.GetValue(0).(string)
+		nameVal, err := row.GetValue(0)
+		if err != nil {
+			continue
+		}
+		name := nameVal.(string)
 		// Extract relative path from name pattern: log:{path}:...
 		parts := strings.SplitN(name, ":", 3)
 		if len(parts) >= 2 {
