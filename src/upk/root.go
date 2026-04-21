@@ -20,7 +20,9 @@ knowledge graphs created by the kg MCP server.`,
 func init() {
 	rootCmd.AddCommand(serverCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(projectsCmd)
 	rootCmd.AddCommand(versionCmd)
 }
 
