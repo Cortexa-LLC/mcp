@@ -3,6 +3,8 @@
 UNAME_S     := $(shell uname -s 2>/dev/null || echo Windows)
 IS_WINDOWS  := $(filter Windows_NT,$(OS))
 BIN_NAME    := $(if $(IS_WINDOWS),kg.exe,kg)
+BUILD       := ../../build
+OUT         := $(BUILD)/$(BIN_NAME)
 
 # Default install dir per platform (override with: make install INSTALL_DIR=/your/path)
 ifeq ($(IS_WINDOWS),Windows_NT)
@@ -21,12 +23,13 @@ help: ## Show this help
 
 build: ## Build the kg binary
 	@echo "Building $(BIN_NAME)..."
-	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BIN_NAME) .
-	@echo "✅ Built: $(BIN_NAME)"
+	@mkdir -p $(BUILD)
+	CGO_ENABLED=1 go build $(LDFLAGS) -o $(OUT) .
+	@echo "✅ Built: $(OUT)"
 
 install: build ## Build and install kg to $(INSTALL_DIR)
 	@mkdir -p $(INSTALL_DIR)
-	@install -m 755 $(BIN_NAME) $(INSTALL_DIR)/$(BIN_NAME)
+	@install -m 755 $(OUT) $(INSTALL_DIR)/$(BIN_NAME)
 	@echo "✅ Installed: $(INSTALL_DIR)/$(BIN_NAME)"
 	@echo ""
 	@echo "Add to your MCP configuration:"
@@ -40,4 +43,4 @@ test: ## Run tests
 	CGO_ENABLED=1 go test ./...
 
 clean: ## Remove build artifacts
-	@rm -f $(BIN_NAME)
+	@rm -rf $(BUILD)

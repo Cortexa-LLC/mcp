@@ -2,4 +2,4 @@
 cover.out
 
 # Compiled binaries
-src/markitdown/markitdown-mcp
+build/

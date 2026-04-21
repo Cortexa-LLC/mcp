@@ -1,15 +1,18 @@
 .PHONY: build run tidy lint test clean install
 
-BIN := markitdown
+BIN     := markitdown
+BUILD   := ../../build
+OUT     := $(BUILD)/$(BIN)
 INSTALL_PATH := /usr/local/bin
 
 build:
 	@echo "Building markitdown..."
-	@go build -o $(BIN) .
-	@echo "✅ Built: $(BIN)"
+	@mkdir -p $(BUILD)
+	@go build -o $(OUT) .
+	@echo "✅ Built: $(OUT)"
 
 run: build
-	./$(BIN)
+	$(OUT)
 
 tidy:
 	go mod tidy
@@ -23,8 +26,8 @@ test:
 install: build
 	@echo "Installing $(BIN) to $(INSTALL_PATH)..."
 	@install -d $(INSTALL_PATH)
-	@install -m 755 $(BIN) $(INSTALL_PATH)/$(BIN)
+	@install -m 755 $(OUT) $(INSTALL_PATH)/$(BIN)
 	@echo "✅ Installed: $(INSTALL_PATH)/$(BIN)"
 
 clean:
-	rm -f $(BIN)
+	rm -rf $(BUILD)
