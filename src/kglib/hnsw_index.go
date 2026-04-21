@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -69,7 +69,7 @@ func (c *vectorIndexCache) get(projectID string, build func() (*projectIndex, er
 // constructs an HNSW graph.  It is called lazily on the first VectorSearch
 // after a cache miss or invalidation.
 func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id AND e.embedding IS NOT NULL
 		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at, e.embedding

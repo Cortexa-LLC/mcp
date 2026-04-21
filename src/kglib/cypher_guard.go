@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -36,7 +36,7 @@ func init() {
 	writeMutatingPattern = regexp.MustCompile(pattern)
 }
 
-// isReadOnlyCypher returns nil when the query contains only read operations
+// IsReadOnlyCypher returns nil when the query contains only read operations
 // (MATCH / RETURN / WITH / WHERE / ORDER BY / SKIP / LIMIT / UNWIND / AS /
 // OPTIONAL MATCH, etc.).  It returns an error if any write-mode keyword is
 // detected.
@@ -45,7 +45,7 @@ func init() {
 // query string (including inside string literals) causes rejection.  This
 // errs on the side of safety; legitimate read queries should not require
 // write keywords.
-func isReadOnlyCypher(query string) error {
+func IsReadOnlyCypher(query string) error {
 	match := writeMutatingPattern.FindString(query)
 	if match != "" {
 		return fmt.Errorf("write keyword %q is not allowed in read-only query_graph queries", strings.ToUpper(match))

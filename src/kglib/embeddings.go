@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func (s *Store) BatchEmbed(ctx context.Context, projectID string, embedder Embed
 
 // GetUnembeddedEntities returns all entities without embeddings
 func (s *Store) GetUnembeddedEntities(projectID string) ([]Entity, error) {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id AND e.embedding IS NULL
 		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
@@ -104,7 +104,7 @@ func (s *Store) GetUnembeddedEntities(projectID string) ([]Entity, error) {
 
 // GetUnembeddedObservations returns all observations without embeddings
 func (s *Store) GetUnembeddedObservations(projectID string) ([]Observation, error) {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
 		WHERE e.project_id = $project_id AND o.embedding IS NULL
 		RETURN o.id, o.entity_id, o.content, o.created_at
@@ -146,7 +146,7 @@ func (s *Store) SetEmbedding(entityID string, embedding []float32) error {
 		return fmt.Errorf("set embedding (lookup project): %w", err)
 	}
 
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity {id: $id})
 		SET e.embedding = $embedding
 	`, map[string]any{"id": entityID, "embedding": embedding})
@@ -165,7 +165,7 @@ func (s *Store) SetEmbedding(entityID string, embedding []float32) error {
 
 // entityProjectID returns the project_id for entityID, or "" if not found.
 func (s *Store) entityProjectID(entityID string) (string, error) {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity {id: $id})
 		RETURN e.project_id
 	`, map[string]any{"id": entityID})
@@ -196,7 +196,7 @@ func (s *Store) entityProjectID(entityID string) (string, error) {
 
 // SetObservationEmbedding stores an embedding vector for an observation
 func (s *Store) SetObservationEmbedding(observationID string, embedding []float32) error {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (o:Observation {id: $id})
 		SET o.embedding = $embedding
 	`, map[string]any{"id": observationID, "embedding": embedding})

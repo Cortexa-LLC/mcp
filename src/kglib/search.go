@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -78,7 +78,7 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 		LIMIT %d
 	`, nameClause, obsClause, limit)
 
-	result, err := s.queryParams(cypherQuery, params)
+	result, err := s.QueryParams(cypherQuery, params)
 	if err != nil {
 		return nil, fmt.Errorf("execute keyword search: %w", err)
 	}
@@ -155,7 +155,7 @@ func (s *Store) GetTopObservations(entityID, projectID string, limit int) ([]*Ob
 		LIMIT %d
 	`, limit)
 
-	result, err := s.queryParams(query, map[string]any{"entity_id": entityID})
+	result, err := s.QueryParams(query, map[string]any{"entity_id": entityID})
 	if err != nil {
 		return nil, fmt.Errorf("query observations: %w", err)
 	}
@@ -217,7 +217,7 @@ func (s *Store) batchGetObservations(entityIDs []string, limit int) (map[string]
 		ORDER BY o.entity_id, o.created_at DESC
 	`
 
-	result, err := s.queryParams(query, map[string]any{"entity_ids": ids})
+	result, err := s.QueryParams(query, map[string]any{"entity_ids": ids})
 	if err != nil {
 		return nil, fmt.Errorf("batch query observations: %w", err)
 	}

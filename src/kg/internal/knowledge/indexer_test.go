@@ -90,7 +90,7 @@ export function Component() {
 		stats.FilesScanned, stats.EntitiesCreated, stats.RelationsCreated)
 
 	// Query for entities to verify they were created
-	result, err := store.query(`MATCH (e:Entity) RETURN count(e)`)
+	result, err := store.Query(`MATCH (e:Entity) RETURN count(e)`)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}
@@ -167,7 +167,7 @@ func main() {}
 	}
 
 	// Query for all entities and verify node_modules was not indexed
-	result, err := store.query(`MATCH (e:Entity) RETURN e.name`)
+	result, err := store.Query(`MATCH (e:Entity) RETURN e.name`)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}
@@ -268,7 +268,7 @@ type ExportedType struct {
 	}
 
 	// Query for the package entity
-	result, err := store.query(`MATCH (e:Entity {type: 'package', name: 'testpkg'}) RETURN e.name`)
+	result, err := store.Query(`MATCH (e:Entity {type: 'package', name: 'testpkg'}) RETURN e.name`)
 	if err != nil {
 		t.Fatalf("Query for package failed: %v", err)
 	}

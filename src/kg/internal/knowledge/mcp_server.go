@@ -177,7 +177,7 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 				if err := isReadOnlyCypher(cypher); err != nil {
 					return nil, err
 				}
-				result, err := s.query(cypher)
+				result, err := s.Query(cypher)
 				if err != nil {
 					return nil, fmt.Errorf("query: %w", err)
 				}

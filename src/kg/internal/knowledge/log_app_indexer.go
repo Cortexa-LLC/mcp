@@ -76,7 +76,7 @@ func IndexApplicationLogs(store *Store, projectID, projectRoot string, scopeFilt
 
 	// Query existing log entities to avoid re-indexing.
 	// We use a naming convention: log entities have names like "log:{relative_path}:{entity_id}"
-	result, err := store.queryParams(`
+	result, err := store.QueryParams(`
 		MATCH (e:Entity {project_id: $project_id})
 		WHERE e.name STARTS WITH 'log:'
 		RETURN e.name

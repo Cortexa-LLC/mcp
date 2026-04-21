@@ -1,46 +1,43 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
 	"strings"
 )
 
-// AllowedRelTypes is the canonical whitelist for relation type labels.
-// relType is interpolated directly into Cypher as a label name (e.g. [r:CALLS]),
-// which cannot be parameterised, so every caller must guard it with validateRelType.
-//
-// This slice is the single source of truth – schema DDL in initSchema() and
-// the validation check in validateRelType() are both derived from it.
-var AllowedRelTypes = []string{
-	RelCalls,
-	RelImports,
-	RelContains,
-	RelBelongsTo,
-	RelFixes,
-	RelSupersedes,
-	RelCausedBy,
-	RelDependsOn,
-	RelImplements,
-	RelRelatesTo,
-	RelTests,
-	RelDocuments,
+// SchemaConfig allows extending the knowledge graph schema with custom entity
+// and relation types beyond the base types.
+type SchemaConfig struct {
+	// AdditionalRelTypes are relation types to add to the schema beyond the base types.
+	// These will be validated alongside base types in validateRelType.
+	AdditionalRelTypes []string
 }
 
-// validateRelType returns nil if relType is in AllowedRelTypes, otherwise an
-// error that names the invalid value and lists the valid choices.
-func validateRelType(relType string) error {
-	for _, allowed := range AllowedRelTypes {
+// validateRelType returns nil if relType is in the store's allowed relation types,
+// otherwise an error that names the invalid value and lists the valid choices.
+func (s *Store) validateRelType(relType string) error {
+	for _, allowed := range s.allowedRelTypes {
 		if relType == allowed {
 			return nil
 		}
 	}
 	return fmt.Errorf("invalid relation type %q: must be one of [%s]",
-		relType, strings.Join(AllowedRelTypes, ", "))
+		relType, strings.Join(s.allowedRelTypes, ", "))
 }
 
 // initSchema creates node and relationship tables if they don't exist.
 // It is called once by OpenStore immediately after the connection is established.
-func (s *Store) initSchema() error {
+// Custom relation types can be provided via SchemaConfig.
+func (s *Store) initSchema(cfg *SchemaConfig) error {
+	// Build complete list of relation types (base + custom)
+	relTypes := make([]string, 0)
+	if cfg != nil && len(cfg.AdditionalRelTypes) > 0 {
+		relTypes = append(relTypes, cfg.AdditionalRelTypes...)
+	}
+
+	// Store for validation
+	s.allowedRelTypes = relTypes
+
 	// Fixed node tables and the HAS_OBSERVATION edge
 	staticStatements := []string{
 		// Entity node table
@@ -63,19 +60,19 @@ func (s *Store) initSchema() error {
 			embedding FLOAT[1536]
 		)`,
 
-		// Structural edge (not in AllowedRelTypes – it is managed internally)
+		// Structural edge (not in allowedRelTypes – it is managed internally)
 		`CREATE REL TABLE IF NOT EXISTS HAS_OBSERVATION(FROM Entity TO Observation)`,
 	}
 
-	// Derive relationship-table DDL from the single source of truth.
-	for _, relType := range AllowedRelTypes {
+	// Derive relationship-table DDL from the configured relation types
+	for _, relType := range relTypes {
 		staticStatements = append(staticStatements,
 			fmt.Sprintf("CREATE REL TABLE IF NOT EXISTS %s(FROM Entity TO Entity)", relType),
 		)
 	}
 
 	for _, stmt := range staticStatements {
-		result, err := s.query(stmt)
+		result, err := s.Query(stmt)
 		if err != nil {
 			return fmt.Errorf("execute schema statement: %w", err)
 		}
@@ -101,7 +98,7 @@ func (s *Store) migrateEmbeddings() error {
 	}
 
 	for _, stmt := range migrations {
-		result, err := s.query(stmt)
+		result, err := s.Query(stmt)
 		if err != nil {
 			// Kuzu returns "already has property <name>" when the column already exists,
 			// which is the normal case on all but the very first Open.

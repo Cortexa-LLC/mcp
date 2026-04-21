@@ -39,14 +39,14 @@ func TestStoreSchema(t *testing.T) {
 	defer store.Close()
 
 	// Verify Entity table exists by trying to query it
-	result, err := store.query("MATCH (e:Entity) RETURN count(e)")
+	result, err := store.Query("MATCH (e:Entity) RETURN count(e)")
 	if err != nil {
 		t.Fatalf("Entity table not created: %v", err)
 	}
 	defer result.Close()
 
 	// Verify Observation table exists
-	result, err = store.query("MATCH (o:Observation) RETURN count(o)")
+	result, err = store.Query("MATCH (o:Observation) RETURN count(o)")
 	if err != nil {
 		t.Fatalf("Observation table not created: %v", err)
 	}

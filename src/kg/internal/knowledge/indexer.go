@@ -147,7 +147,7 @@ func (idx *Indexer) clearProjectData() error {
 			MATCH (from:Entity {project_id: $project_id})-[r:%s]->(to:Entity {project_id: $project_id})
 			DELETE r
 		`, relType) // relType is from a hardcoded whitelist — safe to interpolate
-		result, err := idx.store.queryParams(query, map[string]any{"project_id": idx.projectID})
+		result, err := idx.store.QueryParams(query, map[string]any{"project_id": idx.projectID})
 		if err != nil {
 			return fmt.Errorf("delete %s relations: %w", relType, err)
 		}
@@ -155,7 +155,7 @@ func (idx *Indexer) clearProjectData() error {
 	}
 
 	// Delete HAS_OBSERVATION edges and their Observation nodes for this project.
-	result, err := idx.store.queryParams(`
+	result, err := idx.store.QueryParams(`
 		MATCH (e:Entity {project_id: $project_id})-[r:HAS_OBSERVATION]->(o:Observation)
 		DELETE r, o
 	`, map[string]any{"project_id": idx.projectID})
@@ -165,7 +165,7 @@ func (idx *Indexer) clearProjectData() error {
 	result.Close()
 
 	// Finally delete the entities themselves (DETACH DELETE handles any remaining edges).
-	result, err = idx.store.queryParams(`
+	result, err = idx.store.QueryParams(`
 		MATCH (e:Entity {project_id: $project_id})
 		DETACH DELETE e
 	`, map[string]any{"project_id": idx.projectID})
@@ -388,7 +388,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 		`COPY Entity(id, name, type, project_id, created_at, updated_at) FROM '%s'`,
 		ndjsonPath,
 	)
-	result, err := idx.store.query(query)
+	result, err := idx.store.Query(query)
 	if err == nil {
 		result.Close()
 		return nil
@@ -398,7 +398,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 	// individual parameterized inserts (slower but universally compatible).
 	fmt.Printf("Note: COPY FROM JSON unavailable (%v); falling back to row-by-row insert\n", err)
 	for _, ent := range entities {
-		r, err := idx.store.queryParams(`
+		r, err := idx.store.QueryParams(`
 			CREATE (e:Entity {
 				id: $id,
 				name: $name,
@@ -481,7 +481,7 @@ func (idx *Indexer) bulkLoadRelations(relType string, rels []relationRecord) err
 
 	// relType is from AllowedRelTypes whitelist — safe to interpolate
 	query := fmt.Sprintf(`COPY %s FROM '%s'`, relType, ndjsonPath)
-	result, err := idx.store.query(query)
+	result, err := idx.store.Query(query)
 	if err != nil {
 		return err
 	}

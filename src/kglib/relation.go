@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
 		return fmt.Errorf("target entity: %w", err)
 	}
 
-	if err := validateRelType(relType); err != nil {
+	if err := s.validateRelType(relType); err != nil {
 		return err
 	}
 
@@ -30,7 +30,7 @@ func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
 		CREATE (from)-[:%s]->(to)
 	`, relType)
 
-	result, err := s.queryParams(query, map[string]any{
+	result, err := s.QueryParams(query, map[string]any{
 		"from_id": fromID,
 		"to_id":   toID,
 	})
@@ -50,7 +50,7 @@ func (s *Store) GetRelations(entityID, projectID string) ([]*Relation, error) {
 		return nil, err
 	}
 
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (from:Entity)-[r]->(to:Entity)
 		WHERE from.id = $entity_id AND from.project_id = $project_id
 		RETURN from.id, to.id, label(r)
@@ -87,7 +87,7 @@ func (s *Store) GetRelations(entityID, projectID string) ([]*Relation, error) {
 
 // DeleteRelation removes a specific relation between two entities
 func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
-	if err := validateRelType(relType); err != nil {
+	if err := s.validateRelType(relType); err != nil {
 		return err
 	}
 
@@ -109,7 +109,7 @@ func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
 		DELETE r
 	`, relType)
 
-	result, err := s.queryParams(query, map[string]any{
+	result, err := s.QueryParams(query, map[string]any{
 		"from_id":    fromID,
 		"to_id":      toID,
 		"project_id": projectID,
@@ -124,7 +124,7 @@ func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
 
 // TraverseRelations follows a relation type from an entity and returns connected entities
 func (s *Store) TraverseRelations(entityID, relType, projectID string) ([]*Entity, error) {
-	if err := validateRelType(relType); err != nil {
+	if err := s.validateRelType(relType); err != nil {
 		return nil, err
 	}
 
@@ -141,7 +141,7 @@ func (s *Store) TraverseRelations(entityID, relType, projectID string) ([]*Entit
 		RETURN to.id, to.name, to.type, to.project_id, to.created_at, to.updated_at
 	`, relType)
 
-	result, err := s.queryParams(query, map[string]any{
+	result, err := s.QueryParams(query, map[string]any{
 		"entity_id":  entityID,
 		"project_id": projectID,
 	})

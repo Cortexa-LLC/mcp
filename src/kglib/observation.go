@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -29,7 +29,7 @@ func (s *Store) CreateObservation(entityID, content, projectID string) (*Observa
 	// node, and link them in one go.  Because everything happens in one Cypher
 	// statement there is no risk of an orphaned Observation node if the edge
 	// creation were to fail.
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity {id: $entity_id, project_id: $project_id})
 		CREATE (o:Observation {
 			id: $id,
@@ -61,7 +61,7 @@ func (s *Store) GetObservations(entityID, projectID string) ([]*Observation, err
 		return nil, err
 	}
 
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
 		WHERE e.id = $entity_id AND e.project_id = $project_id
 		RETURN o.id, o.entity_id, o.content, o.created_at
@@ -108,7 +108,7 @@ func (s *Store) DeleteObservation(obsID, entityID, projectID string) error {
 		return err
 	}
 
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
 		WHERE o.id = $obs_id AND e.id = $entity_id AND e.project_id = $project_id
 		DETACH DELETE o

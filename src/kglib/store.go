@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -18,27 +18,28 @@ import (
 // and does not call back into the connection, so it is safe after mu is
 // released.
 type Store struct {
-	db      *kuzu.Database
-	conn    *kuzu.Connection
-	mu      sync.Mutex // guards all s.conn calls
-	path    string
-	hnswIdx *vectorIndexCache // per-project lazy HNSW index
+	db              *kuzu.Database
+	conn            *kuzu.Connection
+	mu              sync.Mutex // guards all s.conn calls
+	path            string
+	hnswIdx         *vectorIndexCache // per-project lazy HNSW index
+	allowedRelTypes []string          // configured relation types for validation
 }
 
-// OpenStore opens or creates a Kuzu database in read-write mode.
+// OpenStore opens or creates a Kuzu database in read-write mode with the given schema configuration.
 // Use OpenStoreReadOnly for concurrent read access.
-func OpenStore(dbPath string) (*Store, error) {
-	return openStoreWithConfig(dbPath, false)
+func OpenStore(dbPath string, cfg *SchemaConfig) (*Store, error) {
+	return openStoreWithConfig(dbPath, false, cfg)
 }
 
 // OpenStoreReadOnly opens a Kuzu database in read-only mode.
 // Multiple processes can hold read-only opens simultaneously.
 // The database must already exist (read-only mode cannot create/migrate schema).
 func OpenStoreReadOnly(dbPath string) (*Store, error) {
-	return openStoreWithConfig(dbPath, true)
+	return openStoreWithConfig(dbPath, true, nil)
 }
 
-func openStoreWithConfig(dbPath string, readOnly bool) (*Store, error) {
+func openStoreWithConfig(dbPath string, readOnly bool, cfg *SchemaConfig) (*Store, error) {
 	// Ensure parent directory exists (only needed for write mode)
 	if !readOnly {
 		dir := filepath.Dir(dbPath)
@@ -47,16 +48,16 @@ func openStoreWithConfig(dbPath string, readOnly bool) (*Store, error) {
 		}
 	}
 
-	cfg := kuzu.DefaultSystemConfig()
-	cfg.ReadOnly = readOnly
+	kuzuCfg := kuzu.DefaultSystemConfig()
+	kuzuCfg.ReadOnly = readOnly
 
 	// Open database
-	db, err := kuzu.OpenDatabase(dbPath, cfg)
+	db, err := kuzu.OpenDatabase(dbPath, kuzuCfg)
 	if err != nil {
 		// "status 1" is Kuzu's lock-acquisition failure — give a human-readable hint
 		if strings.Contains(err.Error(), "status 1") {
 			return nil, fmt.Errorf("knowledge graph database is locked by another process "+
-				"(is `kg index` running?): %w", err)
+				"(is indexing running?): %w", err)
 		}
 		return nil, fmt.Errorf("open kuzu database: %w", err)
 	}
@@ -78,7 +79,7 @@ func openStoreWithConfig(dbPath string, readOnly bool) (*Store, error) {
 	// Initialize schema (DDL) only in read-write mode; read-only mode assumes
 	// the schema was already created by a prior write-mode open.
 	if !readOnly {
-		if err := store.initSchema(); err != nil {
+		if err := store.initSchema(cfg); err != nil {
 			store.Close()
 			return nil, fmt.Errorf("initialize schema: %w", err)
 		}
@@ -101,11 +102,11 @@ func (s *Store) Close() error {
 	return nil
 }
 
-// query runs a raw Cypher statement and returns the Kuzu result handle.
+// Query runs a raw Cypher statement and returns the Kuzu result handle.
 // Use only for schema DDL and other statements that contain no user-supplied values.
-// For queries containing user input, use queryParams instead.
+// For queries containing user input, use QueryParams instead.
 // mu is held for the duration of the call; result iteration is safe after release.
-func (s *Store) query(stmt string) (*kuzu.QueryResult, error) {
+func (s *Store) Query(stmt string) (*kuzu.QueryResult, error) {
 	s.mu.Lock()
 	result, err := s.conn.Query(stmt)
 	s.mu.Unlock()
@@ -115,11 +116,11 @@ func (s *Store) query(stmt string) (*kuzu.QueryResult, error) {
 	return result, nil
 }
 
-// queryParams prepares a Cypher statement and executes it with bound parameters,
+// QueryParams prepares a Cypher statement and executes it with bound parameters,
 // preventing Cypher injection from user-supplied string values.
 // Use $paramName placeholders in stmt and provide matching keys in params.
 // mu is held for the prepare→execute sequence; result iteration is safe after release.
-func (s *Store) queryParams(stmt string, params map[string]any) (*kuzu.QueryResult, error) {
+func (s *Store) QueryParams(stmt string, params map[string]any) (*kuzu.QueryResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prepared, err := s.conn.Prepare(stmt)
@@ -137,7 +138,7 @@ func (s *Store) queryParams(stmt string, params map[string]any) (*kuzu.QueryResu
 // CountEntities returns the total number of entities for a project
 func (s *Store) CountEntities(projectID string) (int, error) {
 	query := `MATCH (e:Entity {project_id: $project_id}) RETURN count(*) AS count`
-	result, err := s.queryParams(query, map[string]any{"project_id": projectID})
+	result, err := s.QueryParams(query, map[string]any{"project_id": projectID})
 	if err != nil {
 		return 0, err
 	}
@@ -159,12 +160,12 @@ func (s *Store) CountEntities(projectID string) (int, error) {
 func (s *Store) CountRelations(projectID string) (int, error) {
 	// Count all typed relations
 	totalCount := 0
-	for _, relType := range AllowedRelTypes {
+	for _, relType := range s.allowedRelTypes {
 		query := fmt.Sprintf(`
 			MATCH (from:Entity {project_id: $project_id})-[r:%s]->(to:Entity {project_id: $project_id})
 			RETURN count(*) AS count
 		`, relType)
-		result, err := s.queryParams(query, map[string]any{"project_id": projectID})
+		result, err := s.QueryParams(query, map[string]any{"project_id": projectID})
 		if err != nil {
 			return 0, err
 		}
@@ -190,7 +191,7 @@ func (s *Store) CountObservations(projectID string) (int, error) {
 		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
 		RETURN count(*) AS count
 	`
-	result, err := s.queryParams(query, map[string]any{"project_id": projectID})
+	result, err := s.QueryParams(query, map[string]any{"project_id": projectID})
 	if err != nil {
 		return 0, err
 	}

@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 		UpdatedAt: time.Now().UTC(),
 	}
 
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		CREATE (e:Entity {
 			id: $id,
 			name: $name,
@@ -45,7 +45,7 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 
 // GetEntity retrieves an entity by ID for a specific project
 func (s *Store) GetEntity(id, projectID string) (*Entity, error) {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.id = $id AND e.project_id = $project_id
 		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
@@ -91,7 +91,7 @@ func (s *Store) GetEntity(id, projectID string) (*Entity, error) {
 // GetEntityByName retrieves an entity by name for a specific project.
 // Returns (nil, nil) when no entity with that name exists.
 func (s *Store) GetEntityByName(name, projectID string) (*Entity, error) {
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.name = $name AND e.project_id = $project_id
 		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
@@ -149,7 +149,7 @@ func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 		params["type"] = entityType
 	}
 
-	result, err := s.queryParams(stmt, params)
+	result, err := s.QueryParams(stmt, params)
 	if err != nil {
 		return nil, fmt.Errorf("query entities: %w", err)
 	}
@@ -196,7 +196,7 @@ func (s *Store) DeleteEntity(id, projectID string) error {
 		return err
 	}
 
-	result, err := s.queryParams(`
+	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.id = $id AND e.project_id = $project_id
 		DETACH DELETE e

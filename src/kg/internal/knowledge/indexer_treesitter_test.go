@@ -18,7 +18,7 @@ func entityExistsByName(t *testing.T, store *Store, name, entityType string) boo
 	} else {
 		q = fmt.Sprintf(`MATCH (e:Entity {name: "%s"}) RETURN count(e)`, name)
 	}
-	result, err := store.query(q)
+	result, err := store.Query(q)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
 	}
@@ -47,7 +47,7 @@ func relationExists(t *testing.T, store *Store, fromName, toName, relType string
 		`MATCH (a:Entity {name: "%s"})-[r:%s]->(b:Entity {name: "%s"}) RETURN count(r)`,
 		fromName, relType, toName,
 	)
-	result, err := store.query(q)
+	result, err := store.Query(q)
 	if err != nil {
 		t.Fatalf("query error: %v", err)
 	}

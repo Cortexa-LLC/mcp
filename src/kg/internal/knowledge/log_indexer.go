@@ -321,13 +321,13 @@ func bulkLoadExecEntities(store *Store, entities []entityRecord) error {
 	}
 	f.Close()
 
-	result, err := store.query(fmt.Sprintf(
+	result, err := store.Query(fmt.Sprintf(
 		`COPY Entity(id, name, type, project_id, created_at, updated_at) FROM '%s'`, path,
 	))
 	if err != nil {
 		// Fall back to row-by-row if COPY FROM JSON is unavailable.
 		for _, e := range entities {
-			r, err2 := store.queryParams(`
+			r, err2 := store.QueryParams(`
 				CREATE (n:Entity {
 					id: $id, name: $name, type: $type,
 					project_id: $project_id,
@@ -387,7 +387,7 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 	nf.Close()
 	ef.Close()
 
-	r, err := store.query(fmt.Sprintf(
+	r, err := store.Query(fmt.Sprintf(
 		`COPY Observation(id, entity_id, content, created_at) FROM '%s'`, nodesPath,
 	))
 	if err != nil {
@@ -395,7 +395,7 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 	}
 	r.Close()
 
-	r, err = store.query(fmt.Sprintf(`COPY HAS_OBSERVATION FROM '%s'`, edgesPath))
+	r, err = store.Query(fmt.Sprintf(`COPY HAS_OBSERVATION FROM '%s'`, edgesPath))
 	if err != nil {
 		return fmt.Errorf("COPY HAS_OBSERVATION: %w", err)
 	}
