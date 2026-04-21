@@ -39,13 +39,7 @@ func TestSuccessCriteria(t *testing.T) {
 			WHERE e.id = $id AND e.project_id = $project_id
 			RETURN e.id, e.name, e.type
 		`
-		stmt, err := store.conn.Prepare(query)
-		if err != nil {
-			t.Fatalf("Failed to prepare query: %v", err)
-		}
-		defer stmt.Close()
-
-		result, err := store.conn.Execute(stmt, map[string]any{
+		result, err := store.QueryParams(query, map[string]any{
 			"id":         entity.ID,
 			"project_id": "test-project",
 		})
@@ -112,13 +106,7 @@ func TestSuccessCriteria(t *testing.T) {
 			WHERE from.id = $from_id AND from.project_id = $project_id
 			RETURN to.id, to.name
 		`
-		stmt, err := store.conn.Prepare(query)
-		if err != nil {
-			t.Fatalf("Failed to prepare query: %v", err)
-		}
-		defer stmt.Close()
-
-		result, err := store.conn.Execute(stmt, map[string]any{
+		result, err := store.QueryParams(query, map[string]any{
 			"from_id":    entity1.ID,
 			"project_id": "test-project",
 		})
@@ -177,13 +165,7 @@ func TestSuccessCriteria(t *testing.T) {
 			WHERE e.id = $entity_id AND e.project_id = $project_id
 			RETURN o.id, o.content
 		`
-		stmt, err := store.conn.Prepare(query)
-		if err != nil {
-			t.Fatalf("Failed to prepare query: %v", err)
-		}
-		defer stmt.Close()
-
-		result, err := store.conn.Execute(stmt, map[string]any{
+		result, err := store.QueryParams(query, map[string]any{
 			"entity_id":  entity.ID,
 			"project_id": "test-project",
 		})
@@ -242,13 +224,7 @@ func TestSuccessCriteria(t *testing.T) {
 			WHERE e.project_id = $project_id
 			RETURN e.id, e.name
 		`
-		stmtA, err := store.conn.Prepare(queryA)
-		if err != nil {
-			t.Fatalf("Failed to prepare query: %v", err)
-		}
-		defer stmtA.Close()
-
-		resultA, err := store.conn.Execute(stmtA, map[string]any{
+		resultA, err := store.QueryParams(queryA, map[string]any{
 			"project_id": "project-a",
 		})
 		if err != nil {

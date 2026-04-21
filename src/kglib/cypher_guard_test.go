@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"strings"
@@ -54,7 +54,7 @@ func TestIsReadOnlyCypher_AllowsReadQueries(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := isReadOnlyCypher(tc.query); err != nil {
+			if err := IsReadOnlyCypher(tc.query); err != nil {
 				t.Errorf("expected nil error for read-only query %q, got: %v", tc.query, err)
 			}
 		})
@@ -136,7 +136,7 @@ func TestIsReadOnlyCypher_RejectsWriteQueries(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := isReadOnlyCypher(tc.query)
+			err := IsReadOnlyCypher(tc.query)
 			if err == nil {
 				t.Errorf("expected error for query with %q keyword, got nil", tc.keyword)
 				return

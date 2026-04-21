@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"path/filepath"
@@ -8,7 +8,7 @@ import (
 func setupTestStore(t *testing.T) *Store {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := OpenStore(dbPath, testSchemaConfig())
 	if err != nil {
 		t.Fatalf("Failed to create test store: %v", err)
 	}

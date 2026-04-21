@@ -1,4 +1,4 @@
-package knowledge
+package kglib
 
 import (
 	"os"
@@ -11,7 +11,7 @@ func TestOpenStore(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := OpenStore(dbPath, testSchemaConfig())
 	if err != nil {
 		t.Fatalf("OpenStore failed: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestStoreSchema(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := OpenStore(dbPath, testSchemaConfig())
 	if err != nil {
 		t.Fatalf("OpenStore failed: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestStoreClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := OpenStore(dbPath, testSchemaConfig())
 	if err != nil {
 		t.Fatalf("OpenStore failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestStoreClose(t *testing.T) {
 // exercise the mutex path.
 func TestStoreConcurrentAccess(t *testing.T) {
 	tmpDir := t.TempDir()
-	store, err := OpenStore(filepath.Join(tmpDir, "concurrent.db"))
+	store, err := OpenStore(filepath.Join(tmpDir, "concurrent.db"), testSchemaConfig())
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestStoreCreateDirectory(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "nested", "dir", "test.db")
 
 	// Parent directory should be created automatically
-	store, err := OpenStore(dbPath)
+	store, err := OpenStore(dbPath, testSchemaConfig())
 	if err != nil {
 		t.Fatalf("OpenStore failed: %v", err)
 	}
