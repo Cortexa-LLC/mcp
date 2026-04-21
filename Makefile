@@ -1,7 +1,7 @@
 .PHONY: all build install uninstall test clean help
 
 # MCP servers to build/install (kglib is a library, not installed)
-MCPS := kg upk markitdown
+MCPS := kg upk markitdown slack
 
 all: build ## Build all MCP servers
 
@@ -28,7 +28,7 @@ install: ## Install all MCP servers to /usr/local/bin
 	@echo "✅ All MCP servers installed successfully"
 	@echo ""
 	@echo "Installed binaries:"
-	@ls -lh /usr/local/bin/kg /usr/local/bin/upk /usr/local/bin/markitdown 2>/dev/null || true
+	@ls -lh /usr/local/bin/kg /usr/local/bin/upk /usr/local/bin/markitdown /usr/local/bin/slack-mcp 2>/dev/null || true
 
 uninstall: ## Uninstall all MCP servers from /usr/local/bin
 	@echo "Uninstalling all MCP servers..."
@@ -71,6 +71,7 @@ help: ## Show this help
 	@echo "  - kg          Project knowledge graph"
 	@echo "  - upk         Unified Personal Knowledge"
 	@echo "  - markitdown  Document to Markdown converter"
+	@echo "  - slack       Slack integration (channels, threads, messages)"
 	@echo ""
 	@echo "Usage:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
