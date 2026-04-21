@@ -1,0 +1,15 @@
+{
+  "default_workspace": "acme",
+  "workspaces": {
+    "acme": {
+      "access_token": "xoxe.xoxp-1-...",
+      "refresh_token": "xoxe-1-...",
+      "client_id": "1234567890.1234567890",
+      "client_secret": "abcdef1234567890abcdef1234567890"
+    },
+    "personal": {
+      "access_token": "xoxe.xoxp-2-...",
+      "refresh_token": "xoxe-2-..."
+    }
+  }
+}

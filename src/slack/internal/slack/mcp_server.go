@@ -40,17 +40,25 @@ type MCPTool struct {
 }
 
 // RunMCPServer runs the Slack MCP server over stdio
-func RunMCPServer(client *Client) error {
+func RunMCPServer(multiClient *MultiClient) error {
 	tools := []MCPTool{
 		{
-			Name:        "list_channels",
-			Description: "List all Slack channels you have access to",
+			Name:        "list_workspaces",
+			Description: "List all configured Slack workspaces",
 			InputSchema: jsonSchema(map[string]string{}, ""),
+		},
+		{
+			Name:        "list_channels",
+			Description: "List all Slack channels you have access to in a workspace",
+			InputSchema: jsonSchema(map[string]string{
+				"workspace": "string",
+			}, ""),
 		},
 		{
 			Name:        "get_thread",
 			Description: "Get full thread/conversation by channel ID and thread timestamp",
 			InputSchema: jsonSchema(map[string]string{
+				"workspace":  "string",
 				"channel_id": "string",
 				"thread_ts":  "string",
 			}, "channel_id", "thread_ts"),
@@ -59,6 +67,7 @@ func RunMCPServer(client *Client) error {
 			Name:        "get_channel_history",
 			Description: "Get recent messages from a channel",
 			InputSchema: jsonSchema(map[string]string{
+				"workspace":  "string",
 				"channel_id": "string",
 				"limit":      "integer",
 			}, "channel_id"),
@@ -67,14 +76,16 @@ func RunMCPServer(client *Client) error {
 			Name:        "search_messages",
 			Description: "Search for messages across all channels",
 			InputSchema: jsonSchema(map[string]string{
-				"query": "string",
-				"limit": "integer",
+				"workspace": "string",
+				"query":     "string",
+				"limit":     "integer",
 			}, "query"),
 		},
 		{
 			Name:        "get_channel_info",
 			Description: "Get information about a specific channel",
 			InputSchema: jsonSchema(map[string]string{
+				"workspace":  "string",
 				"channel_id": "string",
 			}, "channel_id"),
 		},
@@ -119,7 +130,7 @@ func RunMCPServer(client *Client) error {
 			name, _ := params["name"].(string)
 			arguments, _ := params["arguments"].(map[string]interface{})
 
-			result, err := handleToolCall(name, arguments, client)
+			result, err := handleToolCall(name, arguments, multiClient)
 			if err != nil {
 				resp.Error = &MCPError{
 					Code:    -32603,
@@ -164,30 +175,62 @@ func jsonSchema(props map[string]string, required ...string) map[string]interfac
 	}
 }
 
-func handleToolCall(name string, args map[string]interface{}, client *Client) (string, error) {
+func handleToolCall(name string, args map[string]interface{}, multiClient *MultiClient) (string, error) {
 	switch name {
+	case "list_workspaces":
+		return handleListWorkspaces(multiClient)
 	case "list_channels":
-		return handleListChannels(client)
+		return handleListChannels(args, multiClient)
 	case "get_thread":
-		return handleGetThread(args, client)
+		return handleGetThread(args, multiClient)
 	case "get_channel_history":
-		return handleGetChannelHistory(args, client)
+		return handleGetChannelHistory(args, multiClient)
 	case "search_messages":
-		return handleSearchMessages(args, client)
+		return handleSearchMessages(args, multiClient)
 	case "get_channel_info":
-		return handleGetChannelInfo(args, client)
+		return handleGetChannelInfo(args, multiClient)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
 }
 
-func handleListChannels(client *Client) (string, error) {
+func handleListWorkspaces(multiClient *MultiClient) (string, error) {
+	workspaces := multiClient.ListWorkspaces()
+	defaultWS := multiClient.GetDefaultWorkspace()
+
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("Configured workspaces (%d):\n\n", len(workspaces)))
+	for _, ws := range workspaces {
+		if ws == defaultWS {
+			output.WriteString(fmt.Sprintf("- %s (default)\n", ws))
+		} else {
+			output.WriteString(fmt.Sprintf("- %s\n", ws))
+		}
+	}
+
+	return output.String(), nil
+}
+
+func handleListChannels(args map[string]interface{}, multiClient *MultiClient) (string, error) {
+	workspace, _ := args["workspace"].(string)
+
+	client, err := multiClient.GetClient(workspace)
+	if err != nil {
+		return "", err
+	}
+
 	channels, err := client.GetConversations()
 	if err != nil {
 		return "", fmt.Errorf("list channels: %w", err)
 	}
 
+	wsName := workspace
+	if wsName == "" {
+		wsName = multiClient.GetDefaultWorkspace()
+	}
+
 	var output strings.Builder
+	output.WriteString(fmt.Sprintf("Workspace: %s\n", wsName))
 	output.WriteString(fmt.Sprintf("Found %d channels:\n\n", len(channels)))
 
 	for _, ch := range channels {
@@ -206,12 +249,18 @@ func handleListChannels(client *Client) (string, error) {
 	return output.String(), nil
 }
 
-func handleGetThread(args map[string]interface{}, client *Client) (string, error) {
+func handleGetThread(args map[string]interface{}, multiClient *MultiClient) (string, error) {
+	workspace, _ := args["workspace"].(string)
 	channelID, _ := args["channel_id"].(string)
 	threadTS, _ := args["thread_ts"].(string)
 
 	if channelID == "" || threadTS == "" {
 		return "", fmt.Errorf("channel_id and thread_ts are required")
+	}
+
+	client, err := multiClient.GetClient(workspace)
+	if err != nil {
+		return "", err
 	}
 
 	messages, err := client.GetConversationReplies(channelID, threadTS)
@@ -222,7 +271,8 @@ func handleGetThread(args map[string]interface{}, client *Client) (string, error
 	return formatMessages(messages, client)
 }
 
-func handleGetChannelHistory(args map[string]interface{}, client *Client) (string, error) {
+func handleGetChannelHistory(args map[string]interface{}, multiClient *MultiClient) (string, error) {
+	workspace, _ := args["workspace"].(string)
 	channelID, _ := args["channel_id"].(string)
 	limitFloat, _ := args["limit"].(float64)
 	limit := int(limitFloat)
@@ -234,6 +284,11 @@ func handleGetChannelHistory(args map[string]interface{}, client *Client) (strin
 		return "", fmt.Errorf("channel_id is required")
 	}
 
+	client, err := multiClient.GetClient(workspace)
+	if err != nil {
+		return "", err
+	}
+
 	history, err := client.GetConversationHistory(channelID, limit)
 	if err != nil {
 		return "", fmt.Errorf("get history: %w", err)
@@ -242,7 +297,8 @@ func handleGetChannelHistory(args map[string]interface{}, client *Client) (strin
 	return formatMessages(history.Messages, client)
 }
 
-func handleSearchMessages(args map[string]interface{}, client *Client) (string, error) {
+func handleSearchMessages(args map[string]interface{}, multiClient *MultiClient) (string, error) {
+	workspace, _ := args["workspace"].(string)
 	query, _ := args["query"].(string)
 	limitFloat, _ := args["limit"].(float64)
 	limit := int(limitFloat)
@@ -252,6 +308,11 @@ func handleSearchMessages(args map[string]interface{}, client *Client) (string, 
 
 	if query == "" {
 		return "", fmt.Errorf("query is required")
+	}
+
+	client, err := multiClient.GetClient(workspace)
+	if err != nil {
+		return "", err
 	}
 
 	results, err := client.SearchMessages(query, limit)
@@ -274,11 +335,17 @@ func handleSearchMessages(args map[string]interface{}, client *Client) (string, 
 	return output.String(), nil
 }
 
-func handleGetChannelInfo(args map[string]interface{}, client *Client) (string, error) {
+func handleGetChannelInfo(args map[string]interface{}, multiClient *MultiClient) (string, error) {
+	workspace, _ := args["workspace"].(string)
 	channelID, _ := args["channel_id"].(string)
 
 	if channelID == "" {
 		return "", fmt.Errorf("channel_id is required")
+	}
+
+	client, err := multiClient.GetClient(workspace)
+	if err != nil {
+		return "", err
 	}
 
 	channel, err := client.GetChannelInfo(channelID)

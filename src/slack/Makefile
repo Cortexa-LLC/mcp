@@ -20,16 +20,29 @@ install: build ## Install slack to $(INSTALL_DIR)
 	@install -m 755 $(OUT) $(INSTALL_DIR)/$(BIN_NAME)
 	@echo "✅ Installed: $(INSTALL_DIR)/$(BIN_NAME)"
 	@echo ""
-	@echo "Add to MCP configuration (~/.claude.json):"
+	@echo "1. Create config file at ~/.slack-mcp/config.json:"
+	@echo '{'
+	@echo '  "default_workspace": "my-workspace",'
+	@echo '  "workspaces": {'
+	@echo '    "my-workspace": {'
+	@echo '      "access_token": "xoxe.xoxp-...",'
+	@echo '      "refresh_token": "xoxe-...",'
+	@echo '      "client_id": "optional",'
+	@echo '      "client_secret": "optional"'
+	@echo '    }'
+	@echo '  }'
+	@echo '}'
+	@echo ""
+	@echo "2. Add to MCP configuration (~/.claude.json):"
 	@echo '  "slack": {'
 	@echo '    "command": "slack-mcp",'
-	@echo '    "args": ["server"],'
-	@echo '    "env": {'
-	@echo '      "SLACK_ACCESS_TOKEN": "xoxe.xoxp-...",'
-	@echo '      "SLACK_REFRESH_TOKEN": "xoxe-...",'
-	@echo '      "SLACK_CLIENT_ID": "your-client-id",'
-	@echo '      "SLACK_CLIENT_SECRET": "your-client-secret"'
-	@echo '    }'
+	@echo '    "args": ["server"]'
+	@echo '  }'
+	@echo ""
+	@echo "Or specify custom config path:"
+	@echo '  "slack": {'
+	@echo '    "command": "slack-mcp",'
+	@echo '    "args": ["server", "--config", "/path/to/config.json"]'
 	@echo '  }'
 
 uninstall: ## Remove slack from $(INSTALL_DIR)
