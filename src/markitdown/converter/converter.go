@@ -41,9 +41,18 @@ type Converter struct {
 
 // NewConverter creates a Converter using environment-driven config.
 func NewConverter() *Converter {
+	cfg := config.Load()
+
+	// Initialize OpenAI client if configured
+	if cfg.HasOpenAI() {
+		setOpenAIClient(NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIModel))
+	} else {
+		setOpenAIClient(nil)
+	}
+
 	return &Converter{
 		native: newFormatConverter(),
-		cfg:    config.Load(),
+		cfg:    cfg,
 	}
 }
 
@@ -86,15 +95,40 @@ func (c *Converter) GetConversionInfo(_ context.Context) string {
 	fmts := c.native.SupportedFormats()
 	sort.Strings(fmts)
 
+	openaiStatus := "❌ Disabled"
+	if c.cfg.HasOpenAI() {
+		openaiStatus = fmt.Sprintf("✅ Enabled (model: %s)", c.cfg.OpenAIModel)
+	}
+
+	tesseractStatus := "❌ Not installed"
+	if ocrAvailable() {
+		tesseractStatus = "✅ Available"
+	}
+
 	return fmt.Sprintf(`# MarkItDown Conversion Info
 
 ## Supported Formats (native Go — no subprocess required)
 - %s
 
 ## Configuration
-- Max file size: %d MB (override with %s)`,
+- Max file size: %d MB (override with %s)
+
+## Image Processing
+- OpenAI Vision API: %s
+  - Enable: Set %s=true and %s=<your-key>
+  - Model: Set %s=<model> (default: %s)
+- Tesseract OCR: %s
+
+**Note:** When OpenAI is enabled, images are processed with AI-generated descriptions.
+When disabled or on failure, falls back to Tesseract OCR for text extraction.`,
 		strings.Join(fmts, "\n- "),
 		c.cfg.MaxFileSizeMB(),
 		config.EnvMaxFileBytes,
+		openaiStatus,
+		config.EnvEnableOpenAI,
+		config.EnvOpenAIAPIKey,
+		config.EnvOpenAIModel,
+		config.DefaultOpenAIModel,
+		tesseractStatus,
 	)
 }
