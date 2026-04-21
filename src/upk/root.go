@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"runtime"
+
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +28,12 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Printf("upk %s\n", Version)
+		ver := Version
+		if BuildTime != "unknown" {
+			ver = fmt.Sprintf("%s built %s", Version, BuildTime)
+		}
+		fmt.Printf("upk version %s\n", ver)
+		fmt.Printf("Platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("Go:        %s\n", runtime.Version())
 	},
 }

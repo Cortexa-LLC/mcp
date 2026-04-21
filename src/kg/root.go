@@ -36,8 +36,8 @@ var versionCmd = &cobra.Command{
 	Short: "Show version information",
 	Run: func(cmd *cobra.Command, args []string) {
 		ver := kgVersion
-		if kgCommit != "unknown" && len(kgCommit) >= 7 {
-			ver = fmt.Sprintf("%s (%s) built %s", kgVersion, kgCommit[:7], kgBuildTime)
+		if kgBuildTime != "unknown" {
+			ver = fmt.Sprintf("%s built %s", kgVersion, kgBuildTime)
 		}
 		fmt.Printf("kg version %s\n", ver)
 		fmt.Printf("Platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
@@ -49,7 +49,14 @@ func Execute(version, commit, buildTime string) {
 	kgVersion = version
 	kgCommit = commit
 	kgBuildTime = buildTime
+
+	// Set version and custom template for --version flag
 	rootCmd.Version = version
+	if kgBuildTime != "unknown" {
+		rootCmd.Version = fmt.Sprintf("%s built %s", version, kgBuildTime)
+	}
+	rootCmd.SetVersionTemplate(fmt.Sprintf("kg version {{.Version}}\nPlatform:  %s/%s\nGo:        %s\n",
+		runtime.GOOS, runtime.GOARCH, runtime.Version()))
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

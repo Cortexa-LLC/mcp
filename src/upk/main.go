@@ -5,7 +5,11 @@ import (
 	"os"
 )
 
-var Version = "dev"
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
+)
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {

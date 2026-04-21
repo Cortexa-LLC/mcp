@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/Cortexa-LLC/mcp/src/markitdown/converter"
@@ -14,10 +15,16 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// Version information injected at build time.
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
+)
+
 // Server identity constants.
 const (
-	serverName    = "markitdown"
-	serverVersion = "0.1.0"
+	serverName = "markitdown"
 )
 
 // MCP tool parameter key constants — shared between schema definitions and
@@ -27,6 +34,12 @@ const (
 )
 
 func main() {
+	// Handle --version flag before other processing
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		printVersion()
+		return
+	}
+
 	// Check if running in MCP server mode (stdin is not a terminal)
 	stat, _ := os.Stdin.Stat()
 	isPipe := (stat.Mode() & os.ModeCharDevice) == 0
@@ -41,8 +54,18 @@ func main() {
 	runCLI()
 }
 
+func printVersion() {
+	ver := Version
+	if BuildTime != "unknown" {
+		ver = fmt.Sprintf("%s built %s", Version, BuildTime)
+	}
+	fmt.Printf("markitdown version %s\n", ver)
+	fmt.Printf("Platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Printf("Go:        %s\n", runtime.Version())
+}
+
 func runMCPServer() {
-	s := server.NewMCPServer(serverName, serverVersion)
+	s := server.NewMCPServer(serverName, Version)
 	conv := converter.NewConverter()
 	registerTools(s, conv)
 
@@ -57,10 +80,12 @@ func runCLI() {
 
 Usage:
   markitdown [options] <file-or-url>
+  markitdown --version
   markitdown --help
 
 Options:
   --output, -o    Output file (default: stdout)
+  --version, -v   Show version information
   --help, -h      Show this help message
 
 Supported formats:
