@@ -1,10 +1,10 @@
 .PHONY: build run tidy lint test clean install
 
-BIN := markitdown-mcp
+BIN := markitdown
 INSTALL_PATH := /usr/local/bin
 
 build:
-	@echo "Building markitdown-mcp..."
+	@echo "Building markitdown..."
 	@go build -o $(BIN) .
 	@echo "✅ Built: $(BIN)"
 
