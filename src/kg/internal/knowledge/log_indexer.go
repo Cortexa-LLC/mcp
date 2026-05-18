@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// execMeta holds the fields we read from .beads/tasks/{id}/00-metadata.json.
+// execMeta holds the fields we read from .ai/tasks/{id}/00-metadata.json.
 type execMeta struct {
 	Role        string            `json:"role"`
 	Description string            `json:"description"`
@@ -199,11 +199,11 @@ type LogIndexStats struct {
 	Observations int // observation nodes created
 }
 
-// IndexExecutionLogs walks .beads/tasks/*/execution.log under projectRoot and
+// IndexExecutionLogs walks .ai/tasks/*/execution.log under projectRoot and
 // indexes each task run as an "exec:{folderName}" topic entity with structured
 // observations. Already-indexed entities are skipped (idempotent).
 //
-// SCOPE: This function ONLY indexes agent execution logs from .beads/tasks/.
+// SCOPE: This function ONLY indexes agent execution logs from .ai/tasks/ (ai-pack projects).
 // It does NOT index:
 //   - Application logs (crash logs, system logs, server logs)
 //   - Build logs (Xcode build output, compiler warnings)
@@ -215,7 +215,7 @@ type LogIndexStats struct {
 // in two bulk COPY FROM JSON passes to avoid per-row Kuzu round-trips.
 func IndexExecutionLogs(store *Store, projectID, projectRoot string) (LogIndexStats, error) {
 	var stats LogIndexStats
-	pattern := filepath.Join(projectRoot, ".beads", "tasks", "*", "execution.log")
+	pattern := filepath.Join(projectRoot, ".ai", "tasks", "*", "execution.log")
 	logPaths, err := filepath.Glob(pattern)
 	if err != nil {
 		return stats, fmt.Errorf("glob execution logs: %w", err)

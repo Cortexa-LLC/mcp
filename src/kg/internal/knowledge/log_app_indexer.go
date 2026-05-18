@@ -23,14 +23,14 @@ type AppLogIndexStats struct {
 
 // Common directories to exclude when scanning for application logs.
 var defaultExcludeDirs = []string{
-	".git", ".beads", ".ai", "node_modules", "vendor", "build", "dist",
+	".git", ".ai", "node_modules", "vendor", "build", "dist",
 	".gradle", ".idea", ".vscode", "__pycache__", ".pytest_cache",
 }
 
 // IndexApplicationLogs scans projectRoot for application log files and indexes
 // them using registered log plugins (Spring Boot, Android, iOS, etc.).
 //
-// Unlike IndexExecutionLogs (which only handles .beads/tasks agent logs), this
+// Unlike IndexExecutionLogs (which only handles .ai/tasks agent logs), this
 // function processes general application logs: crash logs, server logs, build
 // logs, test logs, etc.
 //

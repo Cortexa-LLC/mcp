@@ -20,7 +20,7 @@ var alwaysSkipDirs = map[string]bool{
 	"node_modules":  true,
 	"vendor":        true,
 	".claude":       true,
-	".beads":        true,
+	".ai":           true,
 	"dist":          true,
 	"build":         true,
 	".build":        true,

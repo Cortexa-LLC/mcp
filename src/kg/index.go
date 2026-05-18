@@ -144,7 +144,7 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 	fmt.Printf("   Relations created: %d\n", stats.RelationsCreated)
 	fmt.Printf("   Duration:          %.3fs\n", codesDur.Seconds())
 
-	// Second pass: index agent execution logs from .beads/tasks/
+	// Second pass: index agent execution logs from .ai/tasks/
 	fmt.Println("📋 Indexing execution logs...")
 	execStart := time.Now()
 	logStats, err := knowledge.IndexExecutionLogs(store, projectID, root)

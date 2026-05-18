@@ -56,9 +56,9 @@ var perfJsonFlag bool
 var perfCmd = &cobra.Command{
 	Use:   "perf",
 	Short: "A/B performance report: KG-enabled vs KG-disabled task executions",
-	Long: `Walks .beads/tasks/*/metrics.json, bins runs by whether the KG preflight
-context was active (kg_preflight_bytes > 0), then prints an aggregate comparison
-table. Use --json to emit machine-readable JSON instead.`,
+	Long: `Walks .ai/tasks/*/metrics.json (ai-pack project), bins runs by whether the KG
+preflight context was active (kg_preflight_bytes > 0), then prints an aggregate
+comparison table. Use --json to emit machine-readable JSON instead.`,
 	RunE: runPerf,
 }
 
@@ -72,9 +72,12 @@ func runPerf(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not determine project root: %w", err)
 	}
 
-	tasksDir := filepath.Join(root, ".beads", "tasks")
+	tasksDir := filepath.Join(root, ".ai", "tasks")
 	entries, err := os.ReadDir(tasksDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no tasks directory found at %s; run this from within an ai-pack project that has executed tasks", tasksDir)
+		}
 		return fmt.Errorf("could not read %s: %w", tasksDir, err)
 	}
 
@@ -119,7 +122,7 @@ func runPerf(cmd *cobra.Command, args []string) error {
 	}
 
 	if loaded == 0 {
-		return fmt.Errorf("no metrics.json files found under %s; run tasks to generate data", tasksDir)
+		return fmt.Errorf("no metrics.json files found under %s; run ai-pack tasks to generate data", tasksDir)
 	}
 
 	onSummary := summarise(&kgOn)
@@ -158,8 +161,8 @@ func summarise(b *perfBucket) perfSummary {
 }
 
 // findProjectRootFromCwd resolves the project root by delegating to the
-// existing findProjectRoot helper (which walks upward looking for .ai/.beads
-// and falls back to git rev-parse).
+// existing findProjectRoot helper (which walks upward looking for .ai and
+// falls back to git rev-parse).
 func findProjectRootFromCwd() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -167,7 +170,7 @@ func findProjectRootFromCwd() (string, error) {
 	}
 	root := findProjectRoot(cwd)
 	if root == "" {
-		return "", fmt.Errorf("no .beads directory found; run from within a beads-managed project")
+		return "", fmt.Errorf("no .ai directory found; run from within an ai-pack project")
 	}
 	return root, nil
 }
