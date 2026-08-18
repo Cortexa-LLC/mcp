@@ -149,7 +149,6 @@ func (idx *Indexer) processGraphQLFile(
 					if writeEntity(entities, seen, eid, name, EntityTypeType, idx.projectID, now) {
 						stats.EntitiesCreated++
 						*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-						stats.RelationsCreated++
 					}
 				}
 				continue
@@ -162,7 +161,6 @@ func (idx *Indexer) processGraphQLFile(
 				if writeEntity(entities, seen, eid, name, EntityTypeType, idx.projectID, now) {
 					stats.EntitiesCreated++
 					*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-					stats.RelationsCreated++
 				}
 				continue
 			}
@@ -177,7 +175,6 @@ func (idx *Indexer) processGraphQLFile(
 				if writeEntity(entities, seen, eid, name, EntityTypeFunction, idx.projectID, now) {
 					stats.EntitiesCreated++
 					*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-					stats.RelationsCreated++
 				}
 			}
 		}

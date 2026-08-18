@@ -42,6 +42,7 @@ Example output:
 | Rust | `.rs` |
 | Java | `.java` |
 | Kotlin | `.kt`, `.kts` |
+| Scala | `.scala`, `.sc` |
 | C / C++ | `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp` |
 | C# | `.cs` |
 | Swift | `.swift` |

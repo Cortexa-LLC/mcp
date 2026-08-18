@@ -23,6 +23,7 @@ import (
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/scala"
 	"github.com/smacker/go-tree-sitter/swift"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -34,6 +35,12 @@ type langConfig struct {
 	FuncNodeTypes   []string // node types that represent function/method definitions
 	TypeNodeTypes   []string // node types that represent class/struct/type definitions
 	ImportNodeTypes []string // node types that represent import statements
+	// CallNodeTypes are node types representing a call site. Leave empty for
+	// languages whose grammar does not expose the callee reliably.
+	CallNodeTypes []string
+	// extractCalleeName pulls the bare callee name from a call node ("helper"
+	// from repo.helper(x)). Defaults to extractCalleeFromFunctionField.
+	extractCalleeName func(node *sitter.Node, src []byte) string
 	// NameField is the tree-sitter named-field that holds the identifier, almost always "name".
 	NameField string
 	// extractFuncName overrides the default name extraction for function nodes.
@@ -122,9 +129,13 @@ func init() {
 		FuncNodeTypes:   []string{"function_declaration"},
 		TypeNodeTypes:   []string{"class_declaration", "object_declaration", "interface_declaration"},
 		ImportNodeTypes: []string{"import_header"},
-		NameField:       "name", // fallback; overridden below by extractFuncName/extractTypeName
-		extractFuncName: extractFirstNamedChildOfType("simple_identifier"),
-		extractTypeName: extractFirstNamedChildOfType("type_identifier"),
+		// Kotlin's call_expression exposes no field for the callee, so it needs
+		// the child-traversal extractor rather than the default.
+		CallNodeTypes:     []string{"call_expression"},
+		extractCalleeName: extractKotlinCallee,
+		NameField:         "name", // fallback; overridden below by extractFuncName/extractTypeName
+		extractFuncName:   extractFirstNamedChildOfType("simple_identifier"),
+		extractTypeName:   extractFirstNamedChildOfType("type_identifier"),
 		extractImportPath: func(node *sitter.Node, src []byte) []string {
 			// import_header: "import kotlin.collections.List"
 			// Strip the "import " keyword prefix from the full node content.
@@ -144,6 +155,7 @@ func init() {
 			FuncNodeTypes:   []string{"function_declaration", "method_declaration"},
 			TypeNodeTypes:   []string{"type_spec"},
 			ImportNodeTypes: []string{"import_spec"},
+			CallNodeTypes:   []string{"call_expression"},
 			NameField:       "name",
 			extractImportPath: func(node *sitter.Node, src []byte) []string {
 				// import_spec has an interpreted_string_literal child
@@ -168,6 +180,7 @@ func init() {
 			FuncNodeTypes:     []string{"function_definition"},
 			TypeNodeTypes:     []string{"class_definition"},
 			ImportNodeTypes:   []string{"import_statement", "import_from_statement"},
+			CallNodeTypes:     []string{"call"},
 			NameField:         "name",
 			extractImportPath: extractPythonImports,
 			isPublic: func(name string) bool {
@@ -179,6 +192,7 @@ func init() {
 			FuncNodeTypes:   []string{"method_declaration", "constructor_declaration"},
 			TypeNodeTypes:   []string{"class_declaration", "interface_declaration", "enum_declaration"},
 			ImportNodeTypes: []string{"import_declaration"},
+			CallNodeTypes:   []string{"method_invocation"},
 			NameField:       "name",
 			extractImportPath: func(node *sitter.Node, src []byte) []string {
 				for i := 0; i < int(node.NamedChildCount()); i++ {
@@ -221,6 +235,26 @@ func init() {
 				raw = strings.TrimSuffix(raw, ";")
 				return []string{strings.TrimSpace(raw)}
 			},
+		},
+		".scala": {
+			Language:      scala.GetLanguage(),
+			FuncNodeTypes: []string{"function_definition", "function_declaration"},
+			// object_definition covers companions and singletons; type_definition covers
+			// the type aliases Scala services lean on heavily for domain modelling.
+			TypeNodeTypes:     []string{"class_definition", "object_definition", "trait_definition", "enum_definition", "type_definition"},
+			ImportNodeTypes:   []string{"import_declaration"},
+			CallNodeTypes:     []string{"call_expression"},
+			NameField:         "name",
+			extractImportPath: extractScalaImports,
+		},
+		".sc": {
+			Language:          scala.GetLanguage(),
+			FuncNodeTypes:     []string{"function_definition", "function_declaration"},
+			TypeNodeTypes:     []string{"class_definition", "object_definition", "trait_definition", "enum_definition", "type_definition"},
+			ImportNodeTypes:   []string{"import_declaration"},
+			CallNodeTypes:     []string{"call_expression"},
+			NameField:         "name",
+			extractImportPath: extractScalaImports,
 		},
 		".swift": {
 			Language:          swift.GetLanguage(),
@@ -296,6 +330,7 @@ func init() {
 			FuncNodeTypes:     []string{"function_declaration", "method_definition"},
 			TypeNodeTypes:     []string{"class_declaration", "interface_declaration", "type_alias_declaration"},
 			ImportNodeTypes:   []string{"import_statement"},
+			CallNodeTypes:     []string{"call_expression"},
 			NameField:         "name",
 			extractImportPath: extractJSImports,
 		},
@@ -304,6 +339,7 @@ func init() {
 			FuncNodeTypes:     []string{"function_declaration", "arrow_function", "method_definition"},
 			TypeNodeTypes:     []string{"class_declaration", "interface_declaration"},
 			ImportNodeTypes:   []string{"import_statement"},
+			CallNodeTypes:     []string{"call_expression"},
 			NameField:         "name",
 			extractImportPath: extractJSImports,
 		},
@@ -312,6 +348,7 @@ func init() {
 			FuncNodeTypes:     []string{"function_declaration", "method_definition", "arrow_function"},
 			TypeNodeTypes:     []string{"class_declaration"},
 			ImportNodeTypes:   []string{"import_statement"},
+			CallNodeTypes:     []string{"call_expression"},
 			NameField:         "name",
 			extractImportPath: extractJSImports,
 		},
@@ -320,6 +357,7 @@ func init() {
 			FuncNodeTypes:     []string{"function_declaration", "method_definition", "arrow_function"},
 			TypeNodeTypes:     []string{"class_declaration"},
 			ImportNodeTypes:   []string{"import_statement"},
+			CallNodeTypes:     []string{"call_expression"},
 			NameField:         "name",
 			extractImportPath: extractJSImports,
 		},
@@ -406,6 +444,7 @@ func (idx *Indexer) processWithTreeSitter(
 	entities *[]entityRecord,
 	seenEntities map[string]bool,
 	relations *[]relationRecord,
+	calls *[]pendingCall,
 	stats *IndexStats,
 ) error {
 	src, err := os.ReadFile(absPath)
@@ -433,7 +472,7 @@ func (idx *Indexer) processWithTreeSitter(
 		stats.EntitiesCreated++
 	}
 
-	idx.walkNode(tree.RootNode(), src, fileID, relPath, cfg, entities, seenEntities, relations, stats, now)
+	idx.walkNode(tree.RootNode(), src, fileID, relPath, cfg, entities, seenEntities, relations, calls, "", stats, now)
 	return nil
 }
 
@@ -447,10 +486,16 @@ func (idx *Indexer) walkNode(
 	entities *[]entityRecord,
 	seenEntities map[string]bool,
 	relations *[]relationRecord,
+	calls *[]pendingCall,
+	enclosingFunc string,
 	stats *IndexStats,
 	now time.Time,
 ) {
 	nodeType := node.Type()
+
+	// Call sites are attributed to the function they appear in, so the current
+	// function propagates down to this node's subtree.
+	childEnclosing := enclosingFunc
 
 	switch {
 	case nodeType == "package_clause":
@@ -464,7 +509,6 @@ func (idx *Indexer) walkNode(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: pkgID, Type: RelBelongsTo})
-				stats.RelationsCreated++
 				break
 			}
 		}
@@ -487,7 +531,9 @@ func (idx *Indexer) walkNode(
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: funcID, Type: RelContains})
-		stats.RelationsCreated++
+		// Calls in this function's body belong to it, including those nested in
+		// lambdas passed to it (Kotlin's launch { work() }, Scala's xs.map { … }).
+		childEnclosing = funcID
 
 	case slices.Contains(cfg.TypeNodeTypes, nodeType):
 		var name string
@@ -507,7 +553,23 @@ func (idx *Indexer) walkNode(
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: typeID, Type: RelContains})
-		stats.RelationsCreated++
+
+	case len(cfg.CallNodeTypes) > 0 && slices.Contains(cfg.CallNodeTypes, nodeType):
+		// Only attribute calls made from inside a known function. Top-level
+		// calls (module initialisers, script bodies) have no caller entity.
+		if enclosingFunc != "" {
+			extract := cfg.extractCalleeName
+			if extract == nil {
+				extract = extractCalleeFromFunctionField
+			}
+			if callee := extract(node, src); callee != "" {
+				*calls = append(*calls, pendingCall{
+					FromID:     enclosingFunc,
+					CalleeName: callee,
+					RelPath:    relPath,
+				})
+			}
+		}
 
 	case slices.Contains(cfg.ImportNodeTypes, nodeType):
 		if cfg.extractImportPath != nil {
@@ -521,7 +583,6 @@ func (idx *Indexer) walkNode(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: importID, Type: RelImports})
-				stats.RelationsCreated++
 			}
 		}
 	}
@@ -529,7 +590,7 @@ func (idx *Indexer) walkNode(
 	// Recurse into children
 	for i := 0; i < int(node.ChildCount()); i++ {
 		if child := node.Child(i); child != nil {
-			idx.walkNode(child, src, fileID, relPath, cfg, entities, seenEntities, relations, stats, now)
+			idx.walkNode(child, src, fileID, relPath, cfg, entities, seenEntities, relations, calls, childEnclosing, stats, now)
 		}
 	}
 }
@@ -576,6 +637,118 @@ func stripStringLiteral(s string) string {
 		}
 	}
 	return s
+}
+
+// lastDottedSegment returns the final identifier of a possibly-qualified
+// expression: "repo.get" → "get", "a.b.c" → "c", "helper" → "helper".
+// Anything that is not a plain identifier yields "" so it is skipped rather
+// than producing a junk edge.
+func lastDottedSegment(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || r == '$':
+		case unicode.IsLetter(r):
+		case unicode.IsDigit(r) && i > 0:
+		default:
+			return ""
+		}
+	}
+	return s
+}
+
+// extractCalleeFromFunctionField handles the common grammar shape where a call
+// node exposes a "function" field (Scala, Python, Go, TypeScript/JavaScript).
+// Java instead exposes "name", already bare, so that is tried second.
+func extractCalleeFromFunctionField(node *sitter.Node, src []byte) string {
+	if fn := node.ChildByFieldName("function"); fn != nil {
+		return lastDottedSegment(fn.Content(src))
+	}
+	if nm := node.ChildByFieldName("name"); nm != nil {
+		return lastDottedSegment(nm.Content(src))
+	}
+	return ""
+}
+
+// extractKotlinCallee handles Kotlin, whose call_expression exposes no field for
+// the callee. The first named child is either a simple_identifier (bare call) or
+// a navigation_expression whose trailing navigation_suffix holds the method name.
+//
+// Note this sees only syntactic calls. Kotlin's operator conventions (a + b →
+// plus), property accessors, delegated-property getValue and callable
+// references (::handle) are invisible here — see resolveCalls for why CALLS is
+// documented as a lower bound.
+func extractKotlinCallee(node *sitter.Node, src []byte) string {
+	if node.NamedChildCount() == 0 {
+		return ""
+	}
+	first := node.NamedChild(0)
+	switch first.Type() {
+	case "simple_identifier":
+		return lastDottedSegment(first.Content(src))
+	case "navigation_expression":
+		return lastDottedSegment(first.Content(src))
+	}
+	return ""
+}
+
+// extractScalaImports turns an import_declaration into one dotted path per imported
+// symbol. The grammar exposes the package prefix as a flat run of identifier children,
+// optionally terminated by a braced selector group or a wildcard:
+//
+//	import java.util.UUID                   → ["java.util.UUID"]
+//	import cats.effect.{IO, Sync}           → ["cats.effect.IO", "cats.effect.Sync"]
+//	import com.depop.a.{Foo => Bar}         → ["com.depop.a.Foo"]  (original, not alias)
+//	import scala.jdk.CollectionConverters._ → ["scala.jdk.CollectionConverters._"]
+func extractScalaImports(node *sitter.Node, src []byte) []string {
+	var prefix []string
+	var results []string
+
+	join := func(leaf string) string {
+		if len(prefix) == 0 {
+			return leaf
+		}
+		return strings.Join(prefix, ".") + "." + leaf
+	}
+
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		child := node.NamedChild(i)
+		switch child.Type() {
+		case "identifier":
+			prefix = append(prefix, child.Content(src))
+		case "namespace_wildcard":
+			results = append(results, join("_"))
+		case "namespace_selectors":
+			for j := 0; j < int(child.NamedChildCount()); j++ {
+				sel := child.NamedChild(j)
+				switch sel.Type() {
+				case "identifier":
+					results = append(results, join(sel.Content(src)))
+				case "arrow_renamed_identifier":
+					// Record the original name; the local alias is not a dependency.
+					if orig := sel.NamedChild(0); orig != nil {
+						results = append(results, join(orig.Content(src)))
+					}
+				case "namespace_wildcard":
+					results = append(results, join("_"))
+				}
+			}
+		}
+	}
+
+	// No selector group or wildcard: the identifier run is the whole path.
+	if len(results) == 0 && len(prefix) > 0 {
+		results = append(results, strings.Join(prefix, "."))
+	}
+
+	return results
 }
 
 // extractPythonImports handles both import_statement and import_from_statement nodes.

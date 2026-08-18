@@ -17,6 +17,13 @@ import (
 // QueryResult iteration (HasNext/Next) operates on a materialised C struct
 // and does not call back into the connection, so it is safe after mu is
 // released.
+// Bounds applied to read-only opens so that many databases can be open at once
+// (see openStoreWithConfig). Knowledge graphs are tiny relative to both values.
+const (
+	readOnlyBufferPoolSize = 256 * 1024 * 1024 // 256 MiB
+	readOnlyMaxDBSize      = 1 << 37           // 128 GiB of reserved address space
+)
+
 type Store struct {
 	db              *kuzu.Database
 	conn            *kuzu.Connection
@@ -50,6 +57,23 @@ func openStoreWithConfig(dbPath string, readOnly bool, cfg *SchemaConfig) (*Stor
 
 	kuzuCfg := kuzu.DefaultSystemConfig()
 	kuzuCfg.ReadOnly = readOnly
+
+	// A federated query opens one database per layer simultaneously, and Kuzu's
+	// defaults are sized for a process holding a single database open:
+	//
+	//   - MaxDbSize defaults to unlimited, which reserves ~8 TiB of virtual
+	//     address space per database. On a 47-bit address space (arm64 macOS)
+	//     the 16th open exhausts it and fails.
+	//   - BufferPoolSize defaults to 80% of total system memory per database.
+	//
+	// Either way Kuzu returns a bare "status 1", which the caller below cannot
+	// distinguish from genuine lock contention. Read-only layers only need
+	// enough pool to cache the pages they touch, so bound both and let
+	// federation scale to hundreds of layers.
+	if readOnly {
+		kuzuCfg.BufferPoolSize = readOnlyBufferPoolSize
+		kuzuCfg.MaxDbSize = readOnlyMaxDBSize
+	}
 
 	// Open database
 	db, err := kuzu.OpenDatabase(dbPath, kuzuCfg)
@@ -156,11 +180,53 @@ func (s *Store) CountEntities(projectID string) (int, error) {
 	return 0, nil
 }
 
+// relationTables returns every Entity→Entity relationship table present in the
+// database, read from the catalog rather than from s.allowedRelTypes.
+//
+// allowedRelTypes is populated by initSchema, which only runs on read-write
+// opens — a read-only Store therefore has an empty list. Anything deriving
+// relation types from it silently sees zero tables. The catalog is also the more
+// truthful source generally: it reflects tables a previous SchemaConfig created,
+// which the current config may no longer list.
+//
+// HAS_OBSERVATION is excluded: it is the structural Entity→Observation edge and
+// is counted by CountObservations instead.
+func (s *Store) relationTables() ([]string, error) {
+	result, err := s.Query("CALL show_tables() RETURN name, type")
+	if err != nil {
+		return nil, fmt.Errorf("list relation tables: %w", err)
+	}
+	defer result.Close()
+
+	var tables []string
+	for result.HasNext() {
+		row, err := result.Next()
+		if err != nil {
+			return nil, fmt.Errorf("list relation tables: %w", err)
+		}
+		nameVal, _ := row.GetValue(0)
+		typeVal, _ := row.GetValue(1)
+		name, _ := nameVal.(string)
+		tableType, _ := typeVal.(string)
+		if tableType != "REL" || name == "HAS_OBSERVATION" {
+			continue
+		}
+		tables = append(tables, name)
+	}
+	return tables, nil
+}
+
 // CountRelations returns the total number of relations for a project
 func (s *Store) CountRelations(projectID string) (int, error) {
-	// Count all typed relations
+	relTypes, err := s.relationTables()
+	if err != nil {
+		return 0, err
+	}
+
 	totalCount := 0
-	for _, relType := range s.allowedRelTypes {
+	for _, relType := range relTypes {
+		// Relationship table names come from the catalog, not from user input,
+		// so interpolating them is safe; Kuzu cannot parameterise a label.
 		query := fmt.Sprintf(`
 			MATCH (from:Entity {project_id: $project_id})-[r:%s]->(to:Entity {project_id: $project_id})
 			RETURN count(*) AS count
