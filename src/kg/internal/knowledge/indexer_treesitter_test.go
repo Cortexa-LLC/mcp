@@ -441,6 +441,85 @@ fn print_point(p: Point) {
 	}
 }
 
+// TestIndexer_ScalaFile verifies extraction of a Scala file: trait, class,
+// object, case class, type alias, concrete and abstract defs, and the three
+// import forms (plain, braced selectors with a rename, wildcard).
+func TestIndexer_ScalaFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	scalaContent := `package com.depop.address
+
+import java.util.UUID
+import cats.effect.{IO, Sync}
+import com.depop.address.repo.{AddressRepo => Repo}
+import scala.jdk.CollectionConverters._
+
+type AddressId = String
+
+case class Address(id: AddressId, line1: String)
+
+trait AddressService {
+  def find(id: AddressId): IO[Option[Address]]
+}
+
+class AddressServiceImpl(repo: Repo) extends AddressService {
+  def find(id: AddressId): IO[Option[Address]] = repo.get(id)
+}
+
+object AddressService {
+  def apply(repo: Repo): AddressService = new AddressServiceImpl(repo)
+}
+`
+	if err := os.WriteFile(filepath.Join(srcDir, "AddressService.scala"), []byte(scalaContent), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store, stats := runIndexer(t, srcDir, dbPath)
+
+	if stats.FilesScanned < 1 {
+		t.Errorf("expected at least 1 file scanned, got %d", stats.FilesScanned)
+	}
+
+	for _, name := range []string{"Address", "AddressService", "AddressServiceImpl", "AddressId"} {
+		if !entityExistsByName(t, store, name, "type") {
+			t.Errorf("expected entity %q (type) to be created", name)
+		}
+	}
+	// find appears both as an abstract function_declaration and a concrete
+	// function_definition; apply is an object method.
+	for _, name := range []string{"find", "apply"} {
+		if !entityExistsByName(t, store, name, "function") {
+			t.Errorf("expected entity %q (function) to be created", name)
+		}
+	}
+	// Plain path, each braced selector separately (original name, not the alias),
+	// and the wildcard preserved as "._".
+	for _, imp := range []string{
+		"java.util.UUID",
+		"cats.effect.IO",
+		"cats.effect.Sync",
+		"com.depop.address.repo.AddressRepo",
+		"scala.jdk.CollectionConverters._",
+	} {
+		if !entityExistsByName(t, store, imp, "import") {
+			t.Errorf("expected entity %q (import) to be created", imp)
+		}
+	}
+	// The rename target must not leak in as a dependency.
+	if entityExistsByName(t, store, "com.depop.address.repo.Repo", "import") {
+		t.Error("alias 'Repo' was recorded as an import path; expected the original name")
+	}
+}
+
 // TestIndexer_SwiftFile verifies extraction of a Swift file: 1 class, 1
 // function and 1 import.
 func TestIndexer_SwiftFile(t *testing.T) {
@@ -672,5 +751,132 @@ export function createShape(): Shape {
 	}
 	if !entityExistsByName(t, store, "events", "import") {
 		t.Error("expected entity 'events' (import) to be created")
+	}
+}
+
+// TestIndexer_ScalaCalls verifies CALLS edges are attributed to the enclosing
+// function, resolve within a file, and include calls nested inside lambdas.
+func TestIndexer_ScalaCalls(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	content := `package com.depop.calls
+
+object Service {
+  def run(x: Int): Int = {
+    val a = helper(x)
+    val b = xs.map(y => helper(y))
+    a
+  }
+  def helper(x: Int): Int = x
+}
+`
+	if err := os.WriteFile(filepath.Join(srcDir, "Service.scala"), []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store, _ := runIndexer(t, srcDir, filepath.Join(tmpDir, "test.db"))
+
+	// run() calls helper() directly and again inside the map lambda; both are
+	// attributed to run, and dedup collapses them to one edge.
+	res, err := store.Query(`MATCH (a:Entity)-[:CALLS]->(b:Entity)
+		RETURN a.id, b.id ORDER BY a.id, b.id`)
+	if err != nil {
+		t.Fatalf("query CALLS: %v", err)
+	}
+	defer res.Close()
+
+	var edges []string
+	for res.HasNext() {
+		row, err := res.Next()
+		if err != nil {
+			t.Fatalf("row: %v", err)
+		}
+		vals, _ := row.GetAsSlice()
+		edges = append(edges, fmt.Sprint(vals))
+	}
+
+	want := "[function:Service.scala:run function:Service.scala:helper]"
+	found := false
+	for _, e := range edges {
+		if e == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected CALLS edge run -> helper, got %v", edges)
+	}
+}
+
+// TestIndexer_KotlinCalls covers the Kotlin extractor, which cannot use the
+// default "function" field. It also pins the known blind spots so the limitation
+// stays documented in code: operator conventions and callable references do not
+// produce CALLS edges.
+func TestIndexer_KotlinCalls(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	content := `package com.depop.calls
+
+class Worker {
+    fun run() {
+        helper(1)
+        launch { work() }
+        val s = left + right
+        list.forEach(::handle)
+    }
+    fun helper(x: Int) {}
+    fun work() {}
+    fun handle(x: Int) {}
+}
+`
+	if err := os.WriteFile(filepath.Join(srcDir, "Worker.kt"), []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store, _ := runIndexer(t, srcDir, filepath.Join(tmpDir, "test.db"))
+
+	callees := map[string]bool{}
+	res, err := store.Query(`MATCH (:Entity)-[:CALLS]->(b:Entity) RETURN b.name`)
+	if err != nil {
+		t.Fatalf("query CALLS: %v", err)
+	}
+	for res.HasNext() {
+		row, err := res.Next()
+		if err != nil {
+			t.Fatalf("row: %v", err)
+		}
+		v, _ := row.GetValue(0)
+		name, _ := v.(string)
+		callees[name] = true
+	}
+	res.Close()
+
+	// Captured: a direct call, and a call inside a coroutine-builder lambda.
+	for _, want := range []string{"helper", "work"} {
+		if !callees[want] {
+			t.Errorf("expected a CALLS edge to %q, got %v", want, callees)
+		}
+	}
+	// Not captured, by design — documented as a lower bound:
+	//   left + right   → additive_expression, not a call (operator convention)
+	//   ::handle       → callable_reference, never invoked syntactically
+	if callees["handle"] {
+		t.Error("callable reference ::handle produced a CALLS edge; " +
+			"the lower-bound caveat in the docs is now wrong and should be updated")
 	}
 }

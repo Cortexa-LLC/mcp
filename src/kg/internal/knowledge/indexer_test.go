@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -442,4 +443,166 @@ export function Component() { return <div>Test</div>; }
 
 	t.Logf("Mixed language indexing: %d files, %d entities, %d relations",
 		stats.FilesScanned, stats.EntitiesCreated, stats.RelationsCreated)
+}
+
+// TestIndexer_ReportedRelationsMatchDatabase locks the invariant that the count
+// the indexer prints is the count actually in the graph.
+//
+// It was previously exactly 2x: every extractor incremented
+// stats.RelationsCreated as it appended to the relations slice, and
+// persistRelations then added len(rels) for the same records. The doubling was
+// invisible until `kg stats` learned to count relations on a read-only store.
+func TestIndexer_ReportedRelationsMatchDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// A spread of extractors: tree-sitter (Go, Scala), markdown and YAML, so a
+	// regression in any one of their counting paths shows up here.
+	files := map[string]string{
+		"main.go": `package app
+
+import "fmt"
+
+type Server struct{}
+
+func Run() { fmt.Println("x") }
+`,
+		"Service.scala": `package com.depop.app
+
+import cats.effect.IO
+
+trait Service {
+  def run(): IO[Unit]
+}
+
+case class Config(name: String)
+`,
+		"README.md": `# Title
+
+## Section One
+
+## Section Two
+`,
+		"config.yaml": "key: value\nnested:\n  inner: 1\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(srcDir, name), []byte(body), 0644); err != nil {
+			t.Fatalf("WriteFile %s: %v", name, err)
+		}
+	}
+
+	store, stats := runIndexer(t, srcDir, filepath.Join(tmpDir, "test.db"))
+
+	if stats.RelationsCreated == 0 {
+		t.Fatal("expected the indexer to report some relations")
+	}
+
+	inDB, err := store.CountRelations("test-project")
+	if err != nil {
+		t.Fatalf("CountRelations: %v", err)
+	}
+
+	if stats.RelationsCreated != inDB {
+		t.Errorf("indexer reported %d relations but the graph holds %d (ratio %.2f)",
+			stats.RelationsCreated, inDB, float64(stats.RelationsCreated)/float64(inDB))
+	}
+}
+
+// TestIndexer_NoDuplicateEdges asserts the graph is a simple graph per relation
+// type: at most one edge for any (from, to, type) triple.
+//
+// This is a design guarantee, not an incidental one. kg's relation tables are
+// declared as `CREATE REL TABLE <T>(FROM Entity TO Entity)` with no properties,
+// so two identical edges carry no distinguishing information — no kind, no line,
+// no count. Extractors do emit repeats, because the entity ID scheme collapses
+// distinct source constructs onto one node: a Scala `case class X` and its
+// companion `object X` both become `type:<file>:X`, as do overloaded `def`s.
+// Kuzu has no relationship uniqueness constraint (as Neo4j does not), so the
+// invariant has to be enforced when writing and checked here.
+func TestIndexer_NoDuplicateEdges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Every construct below collapses two declarations onto one entity ID, so a
+	// naive extractor emits the same CONTAINS or IMPORTS edge twice.
+	scala := `package com.depop.dup
+
+import cats.effect.IO
+import cats.effect.{IO, Sync}
+
+// class + companion object → one type:<file>:Widget
+case class Widget(id: String)
+object Widget {
+  def build(id: String): Widget = Widget(id)
+}
+
+trait Repo {
+  // declaration and definition of the same name → one function:<file>:find
+  def find(id: String): IO[Option[Widget]]
+  def find(id: Int): IO[Option[Widget]] = find(id.toString)
+}
+`
+	if err := os.WriteFile(filepath.Join(srcDir, "Dup.scala"), []byte(scala), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store, _ := runIndexer(t, srcDir, filepath.Join(tmpDir, "test.db"))
+
+	tables, err := store.Query("CALL show_tables() RETURN name, type")
+	if err != nil {
+		t.Fatalf("show_tables: %v", err)
+	}
+	var relTables []string
+	for tables.HasNext() {
+		row, err := tables.Next()
+		if err != nil {
+			t.Fatalf("show_tables row: %v", err)
+		}
+		nameVal, _ := row.GetValue(0)
+		typeVal, _ := row.GetValue(1)
+		name, _ := nameVal.(string)
+		kind, _ := typeVal.(string)
+		if kind == "REL" && name != "HAS_OBSERVATION" {
+			relTables = append(relTables, name)
+		}
+	}
+	tables.Close()
+
+	if len(relTables) == 0 {
+		t.Fatal("no relation tables found")
+	}
+
+	for _, tbl := range relTables {
+		q := fmt.Sprintf(`MATCH (a:Entity)-[:%s]->(b:Entity)
+			WITH a.id AS from, b.id AS to, count(*) AS n
+			WHERE n > 1
+			RETURN from, to, n`, tbl)
+		res, err := store.Query(q)
+		if err != nil {
+			t.Fatalf("duplicate scan on %s: %v", tbl, err)
+		}
+		for res.HasNext() {
+			row, err := res.Next()
+			if err != nil {
+				t.Fatalf("duplicate scan row: %v", err)
+			}
+			vals, _ := row.GetAsSlice()
+			t.Errorf("duplicate %s edge persisted: %v", tbl, vals)
+		}
+		res.Close()
+	}
 }

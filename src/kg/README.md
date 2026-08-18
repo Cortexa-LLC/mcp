@@ -244,5 +244,5 @@ Embeddings are optional — keyword search works without them.
 
 ## Supported Languages (indexer)
 
-Go, Python, TypeScript, JavaScript, Rust, Java, Kotlin, C, C++, C#, Swift, Ruby,
+Go, Python, TypeScript, JavaScript, Rust, Java, Kotlin, Scala, C, C++, C#, Swift, Ruby,
 Bash, Groovy, CSS, HTML, YAML, Markdown, GraphQL, JSON Schema, PDF, Assembly, and Makefile.

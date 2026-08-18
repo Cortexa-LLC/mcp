@@ -88,7 +88,6 @@ func (idx *Indexer) processYAMLFile(
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-		stats.RelationsCreated++
 	}
 
 	root := tree.RootNode()

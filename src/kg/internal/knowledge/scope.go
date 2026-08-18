@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ScopeConfig defines a knowledge graph scope - what gets indexed into a specific database.
@@ -170,9 +171,8 @@ func matchGlob(pattern, path string) bool {
 	}
 
 	// Handle "prefix/**/*" pattern (e.g., "modules/**/*")
-	if len(pattern) > 5 && pattern[len(pattern)-4:] == "/**/*" {
-		prefix := pattern[:len(pattern)-5]
-		return path == prefix || len(path) > len(prefix) && path[:len(prefix)+1] == prefix+"/"
+	if prefix, ok := strings.CutSuffix(pattern, "/**/*"); ok && prefix != "" {
+		return path == prefix || strings.HasPrefix(path, prefix+"/")
 	}
 
 	// Handle "**" at the start (e.g., "**/foo.txt")
