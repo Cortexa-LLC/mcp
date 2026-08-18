@@ -53,6 +53,10 @@ See [kg-scopes.md](kg-scopes.md) for configuration details. When a default scope
 the MCP server automatically queries both the team's database and any platform layers,
 returning unified results with team-specific knowledge taking precedence.
 
+This applies to `kg__search_knowledge` and `kg__get_preflight_context`. `kg__query_graph`
+and `kg__get_file_context` read the active scope's database only, so a Cypher traversal
+will not see platform entities — search first, then narrow with Cypher inside a scope.
+
 ---
 
 ## CLAUDE.md Configuration

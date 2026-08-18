@@ -47,8 +47,26 @@ graph TB
 
 - Each scope defines which files/modules to index into its database
 - Scopes can layer on top of others (e.g., `team-a` includes `platform`)  
-- Queries automatically federate across layers with priority-based merging
-- See [docs/kg-scopes.md](../../docs/kg-scopes.md) for configuration
+- Search automatically federates across layers with priority-based merging; Cypher
+  (`query_graph`), `get_file_context`, and all writes stay in the active scope's database
+- See [docs/kg-scopes.md](../../docs/kg-scopes.md) for configuration, and
+  [kglib](../kglib/README.md#federated-mode) for the underlying `FederatedStore` API
+
+### Personal Knowledge Store
+
+Alongside project graphs, `kg` keeps one user-global store for knowledge that follows you
+between repositories — decisions, conversations, constraints:
+
+```mermaid
+graph LR
+    Search["kg search --with-personal"] --> Project[(".ai/team-a.db\nproject")]
+    Search --> Personal[("~/.ai/knowledge.db\npersonal")]
+    Project --> Merged["Merged results\nproject ranked above personal"]
+    Personal --> Merged
+```
+
+Created with `kg personal init`, written with `--personal`, and federated into project searches
+with `--with-personal`. See [docs/kg-personal-store.md](../../docs/kg-personal-store.md).
 
 ---
 
@@ -126,16 +144,24 @@ kg show <entity-id>               # show one entity with its relations + observa
 # Scope management (monorepos)
 kg config list-scopes             # list all defined scopes
 kg config set-default-scope team-a # set default scope
+kg stats --scope platform         # per-scope counts (never federated)
+
+# Personal knowledge store (user-global, outside any project)
+kg personal init                    # create ~/.ai/knowledge.db (or $KG_HOME)
+kg personal path                    # print its location
+kg add entity --personal --name "kafka-retention" --type decision --summary "[DECISION] …"
+kg search "retention" --personal    # personal store only
+kg search "retention" --with-personal # this project's graph plus personal
+kg personal review                  # recent entries, flagging agent-recorded ones
+kg personal forget <entity-id>      # delete an entry
 
 # Add knowledge manually
 kg add entity --name "auth-design" --type "topic"
 kg add observation <entity-id> "[DECISION] chose JWT because..."
 kg link <from-id> --rel CALLS <to-id>
 
-# Export / maintain
-kg export                         # export graph to GraphML/JSON
-kg graph > graph.graphml          # write GraphML to stdout
-kg gc                             # remove orphaned nodes and observations
+# Reporting
+kg perf                           # A/B report: tasks run with vs without KG preflight
 
 # MCP server (used by Claude — not normally run manually)
 kg server --stdio
@@ -143,6 +169,9 @@ kg server --stdio
 # Info
 kg version
 ```
+
+`kg export`, `kg graph`, `kg gc`, and `kg embed` are registered but not yet implemented —
+they print `Not yet implemented` and exit 0.
 
 See [docs/kg-cli-reference.md](../../docs/kg-cli-reference.md) for the full reference,
 including all flags, entity types, relation types, and Cypher query examples.
@@ -163,6 +192,8 @@ When connected as an MCP server, Claude has access to these tools:
 | `kg__get_file_context` | List all entities indexed from a file |
 | `kg__get_preflight_context` | Summarise recent KG activity for agent preflight |
 | `kg__index_project` | Re-index the project (same as `kg index`) |
+| `kg__search_personal_knowledge` | Search the personal store (only if one exists) |
+| `kg__add_personal_knowledge` | Record an entry in the personal store — only with `--personal-writes`, and only on the user's explicit request |
 
 ---
 
@@ -239,6 +270,8 @@ complete CLAUDE.md patterns and integration use cases.
 |----------|---------|-------------|
 | `OPENAI_API_KEY` | — | Enables OpenAI-backed vector embeddings for semantic search |
 | `OLLAMA_HOST` | `http://localhost:11434` | Enables Ollama-backed embeddings (local) |
+| `KG_HOME` | `~/.ai` | Directory holding the personal knowledge store |
+| `KG_PERSONAL_WRITES` | unset (off) | Allows agents to record personal knowledge via MCP; same as `kg server --personal-writes` |
 
 Embeddings are optional — keyword search works without them.
 

@@ -2,10 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
-	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 	"github.com/spf13/cobra"
 )
 
@@ -17,19 +14,10 @@ var addScopeName string
 var addEntityCmd = &cobra.Command{
 	Use:   "entity",
 	Short: "Add a new entity",
-	Long:  `Add a new entity to the knowledge graph. Writes to the default scope unless --scope is specified.`,
+	Long: `Add a new entity to the knowledge graph. Writes to the default scope unless
+--scope is specified, or to the personal knowledge store with --personal.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cwd, _ := os.Getwd()
-		root := findProjectRoot(cwd)
-		aiDir := filepath.Join(root, ".ai")
-
-		scopeName := addScopeName
-		if scopeName == "" {
-			defaultScope, _ := knowledge.GetDefaultScope(aiDir)
-			scopeName = defaultScope
-		}
-
-		store, projectID, err := openStoreModeWithScope(false, scopeName)
+		store, projectID, err := openTarget(false, addScopeName)
 		if err != nil {
 			return err
 		}
@@ -55,20 +43,11 @@ var addEntityCmd = &cobra.Command{
 var addObservationCmd = &cobra.Command{
 	Use:   "observation <entity-id> <content>",
 	Short: "Add an observation to an entity",
-	Long:  `Add an observation to an entity. Writes to the default scope unless --scope is specified.`,
-	Args:  cobra.ExactArgs(2),
+	Long: `Add an observation to an entity. Writes to the default scope unless --scope
+is specified, or to the personal knowledge store with --personal.`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cwd, _ := os.Getwd()
-		root := findProjectRoot(cwd)
-		aiDir := filepath.Join(root, ".ai")
-
-		scopeName := addScopeName
-		if scopeName == "" {
-			defaultScope, _ := knowledge.GetDefaultScope(aiDir)
-			scopeName = defaultScope
-		}
-
-		store, projectID, err := openStoreModeWithScope(false, scopeName)
+		store, projectID, err := openTarget(false, addScopeName)
 		if err != nil {
 			return err
 		}
@@ -96,6 +75,7 @@ func init() {
 	addEntityCmd.MarkFlagRequired("type")
 
 	addCmd.PersistentFlags().StringVar(&addScopeName, "scope", "", "Scope to write to (default: default scope)")
+	registerPersonalFlag(addEntityCmd, addObservationCmd)
 
 	addCmd.AddCommand(addEntityCmd)
 	addCmd.AddCommand(addObservationCmd)

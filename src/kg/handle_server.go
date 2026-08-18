@@ -42,9 +42,26 @@ func handleServer(cmd *cobra.Command) {
 		}
 	}
 
+	// The personal knowledge store is offered only if it already exists — a user
+	// without one sees no personal tools. Writes to it stay off unless asked for
+	// explicitly, via --personal-writes or KG_PERSONAL_WRITES=1.
+	personal := knowledge.PersonalConfig{}
+	if personalStoreExists() {
+		dbPath, err := personalDBPath()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kg server: locate personal store: %v\n", err)
+			os.Exit(1)
+		}
+		personal = knowledge.PersonalConfig{
+			DBPath:      dbPath,
+			ProjectID:   personalProjectID,
+			AllowWrites: personalWritesEnabled(cmd),
+		}
+	}
+
 	// Each MCP tool call opens the DB, operates, and closes it — no lock is
 	// held between calls, so `kg index` and other CLI commands can run freely.
-	if err := knowledge.RunMCPServer(aiDir, scopeConfig, projectID, projectRoot); err != nil {
+	if err := knowledge.RunMCPServer(aiDir, scopeConfig, projectID, projectRoot, personal); err != nil {
 		fmt.Fprintf(os.Stderr, "kg server: MCP server error: %v\n", err)
 		os.Exit(2)
 	}

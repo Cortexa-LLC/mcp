@@ -2,7 +2,6 @@ package kglib
 
 import (
 	"fmt"
-	"time"
 )
 
 // CreateRelation creates a directed relationship between two entities
@@ -170,12 +169,8 @@ func (s *Store) TraverseRelations(entityID, relType, projectID string) ([]*Entit
 			ProjectID: stringOrEmpty(row[3]),
 		}
 
-		if ts, ok := row[4].(int64); ok {
-			entity.CreatedAt = time.UnixMicro(ts).UTC()
-		}
-		if ts, ok := row[5].(int64); ok {
-			entity.UpdatedAt = time.UnixMicro(ts).UTC()
-		}
+		entity.CreatedAt = timeOrZero(row[4])
+		entity.UpdatedAt = timeOrZero(row[5])
 
 		entities = append(entities, entity)
 	}

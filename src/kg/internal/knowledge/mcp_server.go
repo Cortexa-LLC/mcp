@@ -26,7 +26,7 @@ type KeywordSearcher interface {
 	HybridSearch(projectID, query string, queryEmbedding []float32, config SearchConfig) ([]*SearchResult, error)
 }
 
-func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string) error {
+func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string, personal PersonalConfig) error {
 	// jsonSchema is a helper to build a minimal JSON Schema object descriptor.
 	jsonSchema := func(props map[string]string, required ...string) map[string]interface{} {
 		properties := map[string]interface{}{}
@@ -238,6 +238,15 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 					stats.FilesScanned, stats.EntitiesCreated, stats.RelationsCreated, projectID), nil
 			})
 		},
+	}
+
+	// Personal-knowledge tools, when the user has a personal store. The read
+	// tool is additive — it never changes what the project tools return — and
+	// the write tool only exists when writes are explicitly enabled.
+	personalToolDefs, personalHandlers := personalTools(personal)
+	tools = append(tools, personalToolDefs...)
+	for name, handler := range personalHandlers {
+		handlers[name] = handler
 	}
 
 	server := mcp.NewServer(tools, handlers, bufio.NewReader(os.Stdin), os.Stdout)

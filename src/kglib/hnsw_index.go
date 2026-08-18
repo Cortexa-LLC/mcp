@@ -105,12 +105,8 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 			ProjectID: row[3].(string),
 		}
 
-		if ts, ok := row[4].(int64); ok {
-			entity.CreatedAt = time.UnixMicro(ts).UTC()
-		}
-		if ts, ok := row[5].(int64); ok {
-			entity.UpdatedAt = time.UnixMicro(ts).UTC()
-		}
+		entity.CreatedAt = timeOrZero(row[4])
+		entity.UpdatedAt = timeOrZero(row[5])
 
 		rawEmb, ok := row[6].([]any)
 		if !ok || len(rawEmb) == 0 {

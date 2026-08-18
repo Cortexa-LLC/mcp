@@ -2,6 +2,7 @@ package kglib
 
 import (
 	"fmt"
+	"os"
 	"sort"
 )
 
@@ -13,9 +14,10 @@ type FederatedStore struct {
 }
 
 type layeredStore struct {
-	name     string
-	store    *Store
-	priority int
+	name      string
+	store     *Store
+	priority  int
+	projectID string
 }
 
 // LayerConfig describes a database layer for federation
@@ -23,6 +25,14 @@ type LayerConfig struct {
 	Name     string
 	Store    *Store
 	Priority int
+
+	// ProjectID optionally overrides the project ID used when querying this
+	// layer. Layers written by a different tool (or under a different
+	// convention) do not necessarily share the caller's project ID — a
+	// user-global personal graph, for example, files everything under
+	// "personal" regardless of which project is being searched. Empty means
+	// "use the project ID passed to the search call".
+	ProjectID string
 }
 
 // NewFederatedStore creates a federated store from a list of configured layers.
@@ -34,9 +44,10 @@ func NewFederatedStore(layers []LayerConfig) *FederatedStore {
 
 	for _, layer := range layers {
 		fs.layers = append(fs.layers, &layeredStore{
-			name:     layer.Name,
-			store:    layer.Store,
-			priority: layer.Priority,
+			name:      layer.Name,
+			store:     layer.Store,
+			priority:  layer.Priority,
+			projectID: layer.ProjectID,
 		})
 	}
 
@@ -74,11 +85,17 @@ func (fs *FederatedStore) HybridSearch(projectID, query string, queryEmbedding [
 	layerSources := make(map[string]string)      // entityID -> layer name
 
 	for _, layer := range fs.layers {
-		// Query this layer
-		results, err := layer.store.HybridSearch(projectID, query, queryEmbedding, config)
+		// Query this layer, honouring a per-layer project ID override
+		layerProjectID := projectID
+		if layer.projectID != "" {
+			layerProjectID = layer.projectID
+		}
+
+		results, err := layer.store.HybridSearch(layerProjectID, query, queryEmbedding, config)
 		if err != nil {
-			// Log warning but continue with other layers
-			fmt.Printf("Warning: search in layer %s failed: %v\n", layer.name, err)
+			// Warn and continue with the other layers. This goes to stderr:
+			// callers embedded in an MCP server own stdout for JSON-RPC.
+			fmt.Fprintf(os.Stderr, "Warning: search in layer %s failed: %v\n", layer.name, err)
 			continue
 		}
 

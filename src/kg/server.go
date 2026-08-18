@@ -15,5 +15,7 @@ var serverCmd = &cobra.Command{
 
 func init() {
 	serverCmd.Flags().Bool("stdio", false, "Enable MCP stdio mode (required)")
+	serverCmd.Flags().Bool("personal-writes", false,
+		"Allow agents to record entries in the personal knowledge store (also settable with KG_PERSONAL_WRITES=1)")
 	rootCmd.AddCommand(serverCmd)
 }

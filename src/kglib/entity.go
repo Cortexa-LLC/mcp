@@ -77,13 +77,8 @@ func (s *Store) GetEntity(id, projectID string) (*Entity, error) {
 		ProjectID: stringOrEmpty(row[3]),
 	}
 
-	// Parse timestamps (Kuzu returns timestamps as int64 microseconds)
-	if ts, ok := row[4].(int64); ok {
-		entity.CreatedAt = time.UnixMicro(ts).UTC()
-	}
-	if ts, ok := row[5].(int64); ok {
-		entity.UpdatedAt = time.UnixMicro(ts).UTC()
-	}
+	entity.CreatedAt = timeOrZero(row[4])
+	entity.UpdatedAt = timeOrZero(row[5])
 
 	return entity, nil
 }
@@ -123,12 +118,8 @@ func (s *Store) GetEntityByName(name, projectID string) (*Entity, error) {
 		Type:      stringOrEmpty(row[2]),
 		ProjectID: stringOrEmpty(row[3]),
 	}
-	if ts, ok := row[4].(int64); ok {
-		entity.CreatedAt = time.UnixMicro(ts).UTC()
-	}
-	if ts, ok := row[5].(int64); ok {
-		entity.UpdatedAt = time.UnixMicro(ts).UTC()
-	}
+	entity.CreatedAt = timeOrZero(row[4])
+	entity.UpdatedAt = timeOrZero(row[5])
 	return entity, nil
 }
 
@@ -175,12 +166,8 @@ func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 			ProjectID: stringOrEmpty(row[3]),
 		}
 
-		if ts, ok := row[4].(int64); ok {
-			entity.CreatedAt = time.UnixMicro(ts).UTC()
-		}
-		if ts, ok := row[5].(int64); ok {
-			entity.UpdatedAt = time.UnixMicro(ts).UTC()
-		}
+		entity.CreatedAt = timeOrZero(row[4])
+		entity.UpdatedAt = timeOrZero(row[5])
 
 		entities = append(entities, entity)
 	}

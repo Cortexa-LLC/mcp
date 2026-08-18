@@ -5,7 +5,10 @@ graph. Run it from the project root — it auto-discovers the database location 
 walking up the directory tree to find a `.ai/` directory, a git root, or common
 project markers (`go.mod`, `package.json`, `Cargo.toml`, etc.).
 
-**Database location:** `.ai/knowledge.db` relative to the detected project root.
+**Database location:** `.ai/knowledge.db` relative to the detected project root, or
+`.ai/<scope>.db` when the project defines [scopes](kg-scopes.md). The user-global
+[personal store](kg-personal-store.md) lives at `$KG_HOME`, default `~/.ai/knowledge.db`,
+and is reached with `--personal`.
 
 ---
 
@@ -82,7 +85,9 @@ Example output:
 Scan the project and populate the knowledge graph.
 
 ```bash
-kg index
+kg index                     # default scope, or .ai/knowledge.db if no scopes exist
+kg index --scope team-a      # one scope
+kg index --all               # every defined scope, in turn
 ```
 
 ---
@@ -98,6 +103,23 @@ kg search "token expiry"
 kg search "database connection pool"
 ```
 
+With scopes, `kg search` federates across the active scope **and its layers**, merging by
+priority:
+
+```bash
+kg search "auth middleware"                # default scope + its layers
+kg search "auth middleware" --scope team-a  # team-a + its layers
+kg search "auth middleware" --all           # every scope independently, no layer merging
+```
+
+The personal store is searchable the same way — `--personal` instead of the project, or
+`--with-personal` alongside it (the two are mutually exclusive):
+
+```bash
+kg search "retention" --personal              # personal store only
+kg search "retention" --with-personal         # project graph + personal, personal ranked lower
+```
+
 ---
 
 ### `kg stats`
@@ -106,6 +128,8 @@ Show a count summary of entities, relations, and observations in the graph.
 
 ```bash
 kg stats
+kg stats --scope platform    # counts for one scope's database only (never federated)
+kg stats --personal            # size of the personal store
 ```
 
 ---
@@ -116,7 +140,11 @@ Show a single entity with its relations and observations.
 
 ```bash
 kg show "function:parseToken:internal/auth/token.go"
+kg show "function:parseToken:internal/auth/token.go" --scope platform
 ```
+
+`kg show` reads a single database — pass `--scope` to look inside a layer, or `--personal`
+for an entity in the personal store.
 
 ---
 
@@ -172,35 +200,82 @@ kg link "function:handleRequest" --rel CALLS "function:validateToken"
 
 ---
 
-### `kg export`
+### `kg config list-scopes` / `kg config set-default-scope <name>`
 
-Export the knowledge graph to GraphML or JSON for use in external tools.
+List the scopes defined in `.ai/scope/`, or set the default scope in `.ai/config.json` so
+that `kg index`, `kg search`, `kg stats`, and the MCP server use it without `--scope`.
 
 ```bash
-kg export
+kg config list-scopes
+kg config set-default-scope team-a
+```
+
+See [kg-scopes.md](kg-scopes.md) for scope configuration and federation behaviour.
+
+---
+
+### `kg perf`
+
+A/B report comparing task executions with and without KG preflight context. Reads
+`.ai/tasks/*/metrics.json` (ai-pack projects) and prints an aggregate table.
+
+```bash
+kg perf
+kg perf --json     # machine-readable output
 ```
 
 ---
 
-### `kg graph`
+### `kg personal init` / `path` / `review` / `forget`
 
-Output the current graph in GraphML format (stdout).
+Create the personal knowledge store, or print where it is. `init` is safe to
+re-run, and the first `--personal` write creates the store anyway.
 
 ```bash
-kg graph
-kg graph > knowledge-graph.graphml
+kg personal init
+kg personal path
 ```
+
+`--personal` then targets it from any directory:
+
+```bash
+kg add entity --personal --name "kafka-retention" --type decision --summary "[DECISION] …"
+kg add observation --personal "<entity-id>" "[CAVEAT] compacted topics may differ"
+kg link --personal "<from-id>" --rel RELATES_TO "<to-id>"
+kg search "retention" --personal
+kg show "<entity-id>" --personal
+kg stats --personal
+```
+
+Review what is in there, and remove anything unwanted:
+
+```bash
+kg personal review                  # recent entries, newest first, with who recorded each
+kg personal review --agent-only     # only entries an agent recorded via MCP
+kg personal review --limit 50
+kg personal forget "<entity-id>"    # delete an entry and its observations
+```
+
+Location is `$KG_HOME` if set, otherwise `~/.ai/knowledge.db`. Never run `kg index` against
+it — it holds hand-written knowledge, not indexed source. Full guide:
+[kg-personal-store.md](kg-personal-store.md).
 
 ---
 
-### `kg gc`
+### Not yet implemented
 
-Remove orphaned or unreferenced nodes, observations, and relations. Run
-occasionally to keep the graph clean after large refactors.
+These commands are registered but are placeholders — they print
+`Not yet implemented` and exit successfully. Do not script against them.
 
-```bash
-kg gc
-```
+| Command | Intent |
+|---------|--------|
+| `kg export` | Export the graph to GraphML/JSON for external tools |
+| `kg graph` | Write GraphML to stdout |
+| `kg gc` | Remove orphaned nodes, observations, and relations |
+| `kg embed` | Generate and attach vector embeddings as a batch job |
+
+Embeddings are still populated during indexing when `OPENAI_API_KEY` or `OLLAMA_HOST` is
+set — only the standalone batch command is missing.
 
 ---
 
@@ -213,6 +288,22 @@ the MCP client configuration handles it.
 ```bash
 kg server --stdio
 ```
+
+The server resolves the default scope at startup, so `search_knowledge` and
+`get_preflight_context` federate over that scope's layers. `query_graph`,
+`get_file_context`, and the write tools use the scope's own database only.
+
+If a [personal store](kg-personal-store.md) exists, the server also offers
+`search_personal_knowledge`. Recording personal knowledge is off unless enabled:
+
+```bash
+kg server --stdio --personal-writes    # or KG_PERSONAL_WRITES=1
+```
+
+Without it `add_personal_knowledge` is not registered at all, so an agent cannot write to the
+personal store however it is asked. With it, writes require the user's quoted request, carry
+permanent `[VIA:mcp]` provenance, are capped at 8 KB, and are reversible with
+`kg personal forget`.
 
 ---
 
@@ -253,9 +344,30 @@ kg index
 
 ---
 
+## Scopes and Federated Search
+
+Monorepos can split the graph into scopes — one database per team or subsystem — where a
+scope may `layer` others. `kg search` then queries the scope's database **and** every
+layer, merging results by priority so the scope's own knowledge wins on conflicts.
+
+```bash
+kg config list-scopes                 # what's defined
+kg config set-default-scope team-a    # avoid passing --scope everywhere
+kg index --scope platform            # index a shared layer once
+kg index --scope team-a              # index the domain regularly
+kg search "networking"                # searches team-a.db + platform.db
+```
+
+Only search federates — Cypher, `get_file_context`, and every write path use a single
+database. Full configuration reference: [kg-scopes.md](kg-scopes.md); internals:
+[kg-scopes-implementation.md](kg-scopes-implementation.md).
+
+---
+
 ## Cypher Queries (via MCP)
 
-The `kg__query_graph` MCP tool accepts raw Cypher for precise graph traversal.
+The `kg__query_graph` MCP tool accepts raw Cypher for precise graph traversal. It runs
+against the active scope's database only — no layer federation.
 Common patterns:
 
 ```cypher
@@ -285,5 +397,6 @@ MATCH (e) WHERE NOT ()-[]->(e) RETURN e.name, e.type LIMIT 20
 |----------|--------|
 | `OPENAI_API_KEY` | Enables OpenAI embeddings for semantic (vector) search |
 | `OLLAMA_HOST` | Enables Ollama embeddings (default: `http://localhost:11434`) |
+| `KG_HOME` | Directory holding the personal knowledge store (default: `~/.ai`) |
 
 Embeddings are optional. Without them, `kg search` uses keyword matching only.
