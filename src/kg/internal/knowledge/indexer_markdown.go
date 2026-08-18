@@ -99,7 +99,6 @@ func (idx *Indexer) processMarkdownFile(
 				stats.EntitiesCreated++
 			}
 			*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-			stats.RelationsCreated++
 
 		case "fenced_code_block":
 			lang, content := mdExtractCodeBlock(node.Node, src)
@@ -112,7 +111,6 @@ func (idx *Indexer) processMarkdownFile(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 		}
 		return true

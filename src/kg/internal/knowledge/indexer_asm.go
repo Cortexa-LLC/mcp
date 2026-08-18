@@ -152,7 +152,6 @@ func (idx *Indexer) processAsmFile(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 			inMacro = true
 
@@ -164,7 +163,6 @@ func (idx *Indexer) processAsmFile(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 
 		case asmIncludeOpcodes[opcode]:
@@ -180,7 +178,6 @@ func (idx *Indexer) processAsmFile(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: importID, Type: RelImports})
-				stats.RelationsCreated++
 			}
 
 		default:
@@ -191,7 +188,6 @@ func (idx *Indexer) processAsmFile(
 					stats.EntitiesCreated++
 				}
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 		}
 	}

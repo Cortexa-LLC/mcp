@@ -73,7 +73,6 @@ func (idx *Indexer) processHTMLFile(
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-		stats.RelationsCreated++
 	}
 	emitType := func(name string) {
 		if !mdIsSignificant(name) {
@@ -84,7 +83,6 @@ func (idx *Indexer) processHTMLFile(
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-		stats.RelationsCreated++
 	}
 
 	htmlWalk(tree.RootNode(), src, emitTopic, emitType)

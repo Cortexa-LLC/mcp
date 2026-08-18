@@ -70,7 +70,6 @@ func (idx *Indexer) processJSONSchemaFile(
 		if writeEntity(entities, seen, eid, name, EntityTypeType, idx.projectID, now) {
 			stats.EntitiesCreated++
 			*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-			stats.RelationsCreated++
 		}
 	}
 

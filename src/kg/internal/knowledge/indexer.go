@@ -67,6 +67,15 @@ type relationRecord struct {
 	Type   string
 }
 
+// pendingCall is an unresolved call site: the function containing it, the bare
+// name being called, and the file it appeared in. Resolution needs the whole
+// entity set, so it happens after the walk (see resolveCalls).
+type pendingCall struct {
+	FromID     string // function entity containing the call site
+	CalleeName string // bare callee name, e.g. "helper" from repo.helper(x)
+	RelPath    string // file the call site is in, for same-file resolution
+}
+
 // NewIndexer creates a new indexer
 func NewIndexer(store *Store, projectID, root string) (*Indexer, error) {
 	// Load ignore patterns from .gitignore and .claudeignore
@@ -193,6 +202,10 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 	seenEntities := make(map[string]bool)
 	var relations []relationRecord
 	var observations []obsRecord
+	// Call sites cannot be resolved while walking, because a callee may be
+	// defined in a file not yet visited. They are collected here and resolved
+	// against the complete entity set once the walk finishes.
+	var calls []pendingCall
 
 	// Walk the project directory
 	err := filepath.Walk(idx.root, func(path string, info os.FileInfo, err error) error {
@@ -237,7 +250,7 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 		// Process based on file type
 		ext := strings.ToLower(filepath.Ext(path))
 		if cfg, ok := langRegistry[ext]; ok {
-			if err := idx.processWithTreeSitter(path, relPath, cfg, &entities, seenEntities, &relations, stats); err != nil {
+			if err := idx.processWithTreeSitter(path, relPath, cfg, &entities, seenEntities, &relations, &calls, stats); err != nil {
 				fmt.Printf("Warning: Failed to process %s: %v\n", relPath, err)
 				stats.Errors++
 			}
@@ -305,13 +318,21 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 		return nil, fmt.Errorf("walk directory: %w", err)
 	}
 
+	// Resolve call sites now that every function entity in the scope is known.
+	if len(calls) > 0 {
+		callRels, unresolved, ambiguous := resolveCalls(calls, entities, seenEntities)
+		relations = append(relations, callRels...)
+		fmt.Printf("   Call sites:        %d (%d resolved, %d ambiguous, %d external/unresolved)\n",
+			len(calls), len(callRels), ambiguous, unresolved)
+	}
+
 	// Batch create entities via parameterized Cypher (immune to special characters in names)
 	if err := idx.batchCreateEntities(entities); err != nil {
 		return nil, fmt.Errorf("batch create entities: %w", err)
 	}
 
 	// Batch create relations
-	if err := idx.batchCreateRelations(relations, stats); err != nil {
+	if err := idx.batchCreateRelations(relations, seenEntities, stats); err != nil {
 		return nil, fmt.Errorf("batch create relations: %w", err)
 	}
 
@@ -424,18 +445,88 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 	return nil
 }
 
+// resolveCalls turns collected call sites into CALLS relations.
+//
+// The indexer has no type information, so a callee is only a bare name. Two
+// resolution rules are applied, both chosen to favour precision over recall —
+// a wrong CALLS edge is worse than a missing one, because it invents a
+// dependency that does not exist:
+//
+//  1. Same file: if the enclosing file defines a function of that name, link to
+//     it. Safe, and covers the common helper-in-the-same-file case.
+//  2. Globally unique: if exactly one function of that name exists anywhere in
+//     the scope, link to it. A name with two or more definitions is ambiguous
+//     and is dropped rather than guessed.
+//
+// Everything else is left unresolved: standard-library and third-party calls,
+// and common method names like `apply`, `get` or `map` that are defined many
+// times over. Unresolved counts are reported so the ratio stays visible.
+func resolveCalls(calls []pendingCall, entities []entityRecord, seen map[string]bool) (rels []relationRecord, unresolved, ambiguous int) {
+	// Index function entity IDs by bare name.
+	byName := make(map[string][]string)
+	for _, e := range entities {
+		if e.Type == EntityTypeFunction {
+			byName[e.Name] = append(byName[e.Name], e.ID)
+		}
+	}
+
+	for _, c := range calls {
+		sameFile := fmt.Sprintf("function:%s:%s", c.RelPath, c.CalleeName)
+		if seen[sameFile] {
+			rels = append(rels, relationRecord{FromID: c.FromID, ToID: sameFile, Type: RelCalls})
+			continue
+		}
+		candidates := byName[c.CalleeName]
+		switch {
+		case len(candidates) == 1:
+			rels = append(rels, relationRecord{FromID: c.FromID, ToID: candidates[0], Type: RelCalls})
+		case len(candidates) > 1:
+			ambiguous++
+		default:
+			unresolved++
+		}
+	}
+	return rels, unresolved, ambiguous
+}
+
 // batchCreateRelations bulk-loads relations via NDJSON COPY FROM, grouped by
 // relation type (Kuzu requires one table per relation type).
 // Falls back to individual parameterized inserts if COPY FROM is unsupported.
-func (idx *Indexer) batchCreateRelations(relations []relationRecord, stats *IndexStats) error {
+//
+// known is the set of entity IDs written by this index run. Relations with an
+// endpoint outside it are dropped up front: COPY FROM discards such rows
+// silently, so keeping them only inflated RelationsCreated above what the graph
+// actually holds. Some extractors do emit them — the YAML indexer, for one,
+// references nested keys it never creates as entities.
+func (idx *Indexer) batchCreateRelations(relations []relationRecord, known map[string]bool, stats *IndexStats) error {
 	if len(relations) == 0 {
 		return nil
 	}
 
-	// Group by relation type so we can COPY each type's table separately
+	// Group by relation type so we can COPY each type's table separately,
+	// discarding records that cannot become a distinct edge.
 	byType := make(map[string][]relationRecord)
+	seen := make(map[relationRecord]bool, len(relations))
+	dangling := 0
 	for _, r := range relations {
+		if !known[r.FromID] || !known[r.ToID] {
+			dangling++
+			continue
+		}
+		// Extractors can emit the same edge twice — a Scala class and its
+		// companion object share one entity ID, for instance, so the file yields
+		// two identical CONTAINS records. The graph holds one edge either way.
+		if seen[r] {
+			continue
+		}
+		seen[r] = true
 		byType[r.Type] = append(byType[r.Type], r)
+	}
+	if dangling > 0 {
+		fmt.Printf("Note: skipped %d relation(s) referencing entities that were not indexed\n", dangling)
+	}
+	if len(byType) == 0 {
+		return nil
 	}
 
 	usedFallback := false
@@ -458,6 +549,11 @@ func (idx *Indexer) batchCreateRelations(relations []relationRecord, stats *Inde
 	}
 	return nil
 }
+
+// Note: RelationsCreated is accumulated here, at persist time, and nowhere else.
+// The per-file extractors append to the relations slice without counting — they
+// used to do both, which double-counted every relation and made the indexer
+// report exactly 2x what `kg stats` found in the database.
 
 // bulkLoadRelations writes relations of one type to a temp NDJSON file and
 // uses Kuzu's COPY FROM to bulk-load them into the corresponding edge table.

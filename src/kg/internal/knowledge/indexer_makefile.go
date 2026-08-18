@@ -75,7 +75,6 @@ func (idx *Indexer) processMakefileFile(
 			if writeEntity(entities, seen, eid, name, EntityTypeFunction, idx.projectID, now) {
 				stats.EntitiesCreated++
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 			continue
 		}
@@ -86,7 +85,6 @@ func (idx *Indexer) processMakefileFile(
 			if writeEntity(entities, seen, eid, name, EntityTypeType, idx.projectID, now) {
 				stats.EntitiesCreated++
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 		}
 	}
@@ -156,7 +154,6 @@ func (idx *Indexer) processCMakeFile(
 			if writeEntity(entities, seen, eid, first, EntityTypeType, idx.projectID, now) {
 				stats.EntitiesCreated++
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 
 		case "add_executable", "add_library", "add_subdirectory":
@@ -164,7 +161,6 @@ func (idx *Indexer) processCMakeFile(
 			if writeEntity(entities, seen, eid, first, EntityTypeType, idx.projectID, now) {
 				stats.EntitiesCreated++
 				*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
-				stats.RelationsCreated++
 			}
 
 		case "find_package", "include":
@@ -173,7 +169,6 @@ func (idx *Indexer) processCMakeFile(
 				stats.EntitiesCreated++
 			}
 			*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelImports})
-			stats.RelationsCreated++
 		}
 	}
 	return scanner.Err()
