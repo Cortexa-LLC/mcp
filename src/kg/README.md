@@ -60,7 +60,7 @@ between repositories — decisions, conversations, constraints:
 ```mermaid
 graph LR
     Search["kg search --with-personal"] --> Project[(".ai/team-a.db\nproject")]
-    Search --> Personal[("~/.ai/knowledge.db\npersonal")]
+    Search --> Personal[("~/.kg/knowledge.db\npersonal")]
     Project --> Merged["Merged results\nproject ranked above personal"]
     Personal --> Merged
 ```
@@ -147,7 +147,7 @@ kg config set-default-scope team-a # set default scope
 kg stats --scope platform         # per-scope counts (never federated)
 
 # Personal knowledge store (user-global, outside any project)
-kg personal init                    # create ~/.ai/knowledge.db (or $KG_HOME)
+kg personal init                    # create ~/.kg/knowledge.db (or $KG_HOME)
 kg personal path                    # print its location
 kg add entity --personal --name "kafka-retention" --type decision --summary "[DECISION] …"
 kg search "retention" --personal    # personal store only
@@ -270,7 +270,7 @@ complete CLAUDE.md patterns and integration use cases.
 |----------|---------|-------------|
 | `OPENAI_API_KEY` | — | Enables OpenAI-backed vector embeddings for semantic search |
 | `OLLAMA_HOST` | `http://localhost:11434` | Enables Ollama-backed embeddings (local) |
-| `KG_HOME` | `~/.ai` | Directory holding the personal knowledge store |
+| `KG_HOME` | `~/.kg` | Directory holding the personal knowledge store |
 | `KG_PERSONAL_WRITES` | unset (off) | Allows agents to record personal knowledge via MCP; same as `kg server --personal-writes` |
 
 Embeddings are optional — keyword search works without them.

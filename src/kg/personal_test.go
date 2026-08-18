@@ -29,7 +29,7 @@ func TestPersonalDir_HonoursEnvOverride(t *testing.T) {
 	}
 }
 
-func TestPersonalDir_DefaultsToHomeAI(t *testing.T) {
+func TestPersonalDir_DefaultsToHomeKG(t *testing.T) {
 	t.Setenv(personalDirEnv, "")
 
 	got, err := personalDir()
@@ -40,8 +40,18 @@ func TestPersonalDir_DefaultsToHomeAI(t *testing.T) {
 	if err != nil {
 		t.Skipf("no home directory available: %v", err)
 	}
-	if want := filepath.Join(home, ".ai"); got != want {
+	if want := filepath.Join(home, personalDirName); got != want {
 		t.Errorf("personalDir() = %q, want %q", got, want)
+	}
+}
+
+// The personal store must not default to ~/.ai: findProjectRoot treats a .ai
+// directory as a project-root marker and prefers the nearest ancestor holding
+// one, so a ~/.ai would silently make $HOME the project root for every repo
+// beneath it that lacks its own .ai.
+func TestPersonalDirName_IsNotTheProjectRootMarker(t *testing.T) {
+	if personalDirName == ".ai" {
+		t.Fatal("personal store must not live in a directory named .ai — it would hijack project-root discovery for every repo under $HOME")
 	}
 }
 

@@ -23,7 +23,7 @@ graph LR
     MD["markitdown-mcp\nDocument converter"]
     KG["kg\nKnowledge graph"]
     KGDB[(".ai/knowledge.db\nper project")]
-    PERSONAL[("~/.ai/knowledge.db\nper user")]
+    PERSONAL[("~/.kg/knowledge.db\nper user")]
 
     Client -->|stdio| MD
     Client -->|stdio| KG
