@@ -7,7 +7,7 @@ project markers (`go.mod`, `package.json`, `Cargo.toml`, etc.).
 
 **Database location:** `.ai/knowledge.db` relative to the detected project root, or
 `.ai/<scope>.db` when the project defines [scopes](kg-scopes.md). The user-global
-[personal store](kg-personal-store.md) lives at `$KG_HOME`, default `~/.ai/knowledge.db`,
+[personal store](kg-personal-store.md) lives at `$KG_HOME`, default `~/.kg/knowledge.db`,
 and is reached with `--personal`.
 
 ---
@@ -256,7 +256,7 @@ kg personal review --limit 50
 kg personal forget "<entity-id>"    # delete an entry and its observations
 ```
 
-Location is `$KG_HOME` if set, otherwise `~/.ai/knowledge.db`. Never run `kg index` against
+Location is `$KG_HOME` if set, otherwise `~/.kg/knowledge.db`. Never run `kg index` against
 it — it holds hand-written knowledge, not indexed source. Full guide:
 [kg-personal-store.md](kg-personal-store.md).
 
@@ -397,6 +397,6 @@ MATCH (e) WHERE NOT ()-[]->(e) RETURN e.name, e.type LIMIT 20
 |----------|--------|
 | `OPENAI_API_KEY` | Enables OpenAI embeddings for semantic (vector) search |
 | `OLLAMA_HOST` | Enables Ollama embeddings (default: `http://localhost:11434`) |
-| `KG_HOME` | Directory holding the personal knowledge store (default: `~/.ai`) |
+| `KG_HOME` | Directory holding the personal knowledge store (default: `~/.kg`) |
 
 Embeddings are optional. Without them, `kg search` uses keyword matching only.

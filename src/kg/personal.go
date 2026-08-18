@@ -24,6 +24,13 @@ const (
 	// personalDirEnv overrides the location of the personal store, mainly for
 	// tests and for keeping it on synced storage.
 	personalDirEnv = "KG_HOME"
+
+	// personalDirName is the default directory for the personal store, under the
+	// user's home. Deliberately NOT ".ai": findProjectRoot treats a .ai directory
+	// as a project-root marker and prefers the nearest ancestor that has one, so a
+	// ~/.ai would make $HOME the project root for every repo beneath it that lacks
+	// its own .ai — kg index would then try to walk the whole home directory.
+	personalDirName = ".kg"
 )
 
 // usePersonal is set by the --personal flag on commands that support it.
@@ -49,7 +56,7 @@ func personalDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("determine home directory (set %s to override): %w", personalDirEnv, err)
 	}
-	return filepath.Join(home, ".ai"), nil
+	return filepath.Join(home, personalDirName), nil
 }
 
 // personalDBPath returns the path to the personal store's database.

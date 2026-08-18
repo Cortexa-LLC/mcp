@@ -14,11 +14,17 @@ kg personal init
 ```
 
 ```
-✅ Created personal knowledge store: /Users/you/.ai/knowledge.db
+✅ Created personal knowledge store: /Users/you/.kg/knowledge.db
 ```
 
-Location is `$KG_HOME` if set, otherwise `~/.ai/knowledge.db`. `kg personal path` prints it,
-and `kg personal init` is safe to re-run. You can skip init entirely — the first `--personal`
+Location is `$KG_HOME` if set, otherwise `~/.kg/knowledge.db`. `kg personal path` prints it,
+and `kg personal init` is safe to re-run.
+
+It deliberately does **not** live in `~/.ai`. Project-root discovery treats a `.ai`
+directory as a root marker and picks the nearest ancestor that has one, ahead of the git
+root — so a `~/.ai` would make `$HOME` the project root for every repo beneath it without its
+own `.ai`, and `kg index` there would try to walk your entire home directory. For the same
+reason, do not point `KG_HOME` at a directory named `.ai`. You can skip init entirely — the first `--personal`
 write creates the store — but running it explicitly confirms where it landed.
 
 Set `KG_HOME` to keep the store on synced storage:

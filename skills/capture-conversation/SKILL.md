@@ -12,7 +12,7 @@ otherwise have to rediscover or ask about again.
 ## Prerequisites
 
 The `kg` binary must be on `PATH` (`kg version`). The personal store lives at
-`$KG_HOME`, or `~/.ai/knowledge.db` by default:
+`$KG_HOME`, or `~/.kg/knowledge.db` by default:
 
 ```bash
 kg personal path                       # where it is
