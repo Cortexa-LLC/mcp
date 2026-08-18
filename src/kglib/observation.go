@@ -90,9 +90,7 @@ func (s *Store) GetObservations(entityID, projectID string) ([]*Observation, err
 			Content:  stringOrEmpty(row[2]),
 		}
 
-		if ts, ok := row[3].(int64); ok {
-			obs.CreatedAt = time.UnixMicro(ts).UTC()
-		}
+		obs.CreatedAt = timeOrZero(row[3])
 
 		observations = append(observations, obs)
 	}

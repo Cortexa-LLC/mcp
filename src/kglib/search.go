@@ -105,13 +105,8 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 			ProjectID: row[3].(string),
 		}
 
-		// Parse timestamps (Kuzu returns timestamps as int64 microseconds)
-		if ts, ok := row[4].(int64); ok {
-			entity.CreatedAt = time.UnixMicro(ts).UTC()
-		}
-		if ts, ok := row[5].(int64); ok {
-			entity.UpdatedAt = time.UnixMicro(ts).UTC()
-		}
+		entity.CreatedAt = timeOrZero(row[4])
+		entity.UpdatedAt = timeOrZero(row[5])
 
 		entities = append(entities, entity)
 	}
@@ -181,9 +176,7 @@ func (s *Store) GetTopObservations(entityID, projectID string, limit int) ([]*Ob
 		}
 
 		// Parse timestamp (Kuzu returns timestamps as int64 microseconds)
-		if ts, ok := row[3].(int64); ok {
-			obs.CreatedAt = time.UnixMicro(ts).UTC()
-		}
+		obs.CreatedAt = timeOrZero(row[3])
 
 		observations = append(observations, obs)
 	}
@@ -249,9 +242,7 @@ func (s *Store) batchGetObservations(entityIDs []string, limit int) (map[string]
 			EntityID: entityID,
 			Content:  row[2].(string),
 		}
-		if ts, ok := row[3].(int64); ok {
-			obs.CreatedAt = time.UnixMicro(ts).UTC()
-		}
+		obs.CreatedAt = timeOrZero(row[3])
 
 		obsMap[entityID] = append(obsMap[entityID], obs)
 	}

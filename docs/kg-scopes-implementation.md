@@ -86,6 +86,14 @@ type ScopeConfig struct {
 
 **Location**: `src/kg/internal/knowledge/federated.go`
 
+> **Now a thin adapter.** The merge implementation lives in `kglib`
+> (`src/kglib/federated.go`, covered by `federated_test.go`); this file only aliases
+> `kglib.FederatedStore` and turns a `ScopeConfig` into kglib's layer list.
+> `OpenFederatedStoreWithExtra` additionally accepts caller-supplied layers, which is how
+> `kg search --with-personal` federates the personal store in at priority 0. See
+> [../src/kglib/README.md](../src/kglib/README.md#federated-mode) and
+> [kg-personal-store.md](kg-personal-store.md).
+
 ```go
 type FederatedStore struct {
     layers []*layeredStore
@@ -336,7 +344,7 @@ kg add observation <id> "[INVESTIGATION] ..."  # Goes to team-a.db
 - `src/kg/index.go` - scope-aware indexing with --scope/--all flags
 - `src/kg/search.go` - federated search support
 - `src/kg/handle_server.go` - scope detection for MCP server
-- `src/kg/internal/knowledge/mcp_server.go` - federated search in MCP tools
+- `src/kg/internal/knowledge/mcp_server.go` - federated search in MCP tools (`search_knowledge`, `get_preflight_context` only — `query_graph`, `get_file_context`, and all writes use the scope's own database)
 - `src/kg/internal/knowledge/indexer.go` - added `scopeFilter` field and filtering
 - `src/kg/README.md` - architecture and CLI docs updated
 - `docs/kg-claude-integration.md` - multi-scope section added

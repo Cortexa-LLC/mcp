@@ -18,6 +18,16 @@ var statsCmd = &cobra.Command{
 
 By default, shows stats for the default scope. Use --scope to specify a different scope.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if usePersonal {
+			store, projectID, err := openPersonalStore(true)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			fmt.Println("Stats for the personal knowledge store")
+			return printStats(store, projectID)
+		}
+
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
@@ -63,30 +73,36 @@ By default, shows stats for the default scope. Use --scope to specify a differen
 		}
 		defer store.Close()
 
-		// Use efficient count queries instead of iterating all entities
-		entityCount, err := store.CountEntities(projectID)
-		if err != nil {
-			return err
-		}
-
-		relationCount, err := store.CountRelations(projectID)
-		if err != nil {
-			return err
-		}
-
-		observationCount, err := store.CountObservations(projectID)
-		if err != nil {
-			return err
-		}
-
-		fmt.Printf("Entities: %d\n", entityCount)
-		fmt.Printf("Relations: %d\n", relationCount)
-		fmt.Printf("Observations: %d\n", observationCount)
-		return nil
+		return printStats(store, projectID)
 	},
+}
+
+// printStats prints entity, relation, and observation counts for one store.
+// Uses count queries rather than iterating entities.
+func printStats(store *knowledge.Store, projectID string) error {
+	entityCount, err := store.CountEntities(projectID)
+	if err != nil {
+		return err
+	}
+
+	relationCount, err := store.CountRelations(projectID)
+	if err != nil {
+		return err
+	}
+
+	observationCount, err := store.CountObservations(projectID)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Entities: %d\n", entityCount)
+	fmt.Printf("Relations: %d\n", relationCount)
+	fmt.Printf("Observations: %d\n", observationCount)
+	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(statsCmd)
+	registerPersonalFlag(statsCmd)
 	statsCmd.Flags().StringVar(&statsScopeName, "scope", "", "Show stats for a specific scope")
 }

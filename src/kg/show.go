@@ -16,6 +16,15 @@ var showCmd = &cobra.Command{
 	Short: "Show entity with details (relations, observations)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if usePersonal {
+			store, projectID, err := openPersonalStore(true)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			return showEntity(store, args[0], projectID)
+		}
+
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
@@ -57,27 +66,32 @@ var showCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		id := args[0]
-		entity, err := store.GetEntity(id, projectID)
-		if err != nil {
-			return err
-		}
-		relations, _ := store.GetRelations(id, projectID)
-		observations, _ := store.GetObservations(id, projectID)
-		fmt.Printf("Entity: %s\nType: %s\nID: %s\n", entity.Name, entity.Type, entity.ID)
-		fmt.Println("Relations:")
-		for _, r := range relations {
-			fmt.Printf("  %s --%s--> %s\n", r.FromID, r.Type, r.ToID)
-		}
-		fmt.Println("Observations:")
-		for _, o := range observations {
-			fmt.Printf("  - %s\n", o.Content)
-		}
-		return nil
+		return showEntity(store, args[0], projectID)
 	},
+}
+
+// showEntity prints one entity with its relations and observations.
+func showEntity(store *knowledge.Store, id, projectID string) error {
+	entity, err := store.GetEntity(id, projectID)
+	if err != nil {
+		return err
+	}
+	relations, _ := store.GetRelations(id, projectID)
+	observations, _ := store.GetObservations(id, projectID)
+	fmt.Printf("Entity: %s\nType: %s\nID: %s\n", entity.Name, entity.Type, entity.ID)
+	fmt.Println("Relations:")
+	for _, r := range relations {
+		fmt.Printf("  %s --%s--> %s\n", r.FromID, r.Type, r.ToID)
+	}
+	fmt.Println("Observations:")
+	for _, o := range observations {
+		fmt.Printf("  - %s\n", o.Content)
+	}
+	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(showCmd)
 	showCmd.Flags().StringVar(&showScopeName, "scope", "", "Show entity from a specific scope")
+	registerPersonalFlag(showCmd)
 }
