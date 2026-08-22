@@ -300,6 +300,54 @@ Notes that apply everywhere:
   re-seed; back up the full data dir only if re-indexing large repos is expensive
   enough to matter.
 
+## Migrating existing databases
+
+Three distinct migration concerns, with different answers:
+
+- **Additive schema changes (handled).** Every read-write open runs `initSchema`,
+  which is re-runnable by construction: `CREATE ... IF NOT EXISTS` for tables (this is
+  how `KGMeta` arrives on old databases) and `ALTER TABLE ADD` with "already has
+  property" suppressed for new columns (how the embedding columns arrived). An existing
+  database migrates on its next `kg index` or write; read paths tolerate not-yet-migrated
+  schema (`GetMeta` reports "no stamp" rather than erroring on a pre-KGMeta database).
+- **Provenance backfill (handled).** Pre-existing databases gain their stamp on the next
+  `kg index`; until then `kg push` falls back to current HEAD with a warning. The stamp's
+  `KGVersion` field means every database self-reports which kg wrote it.
+- **Kuzu storage-format upgrades (designed, not yet built — automate fully).** go-kuzu
+  pins the storage engine; a future bump can make old `.db` files unopenable. Users who
+  have adopted kg must never face manual breakage, so the plan is zero-action
+  migration, split by data kind:
+
+  1. **Indexed data — auto-rebuild.** Project graphs are derivable from source. On a
+     format-mismatch open error, the new binary moves the database aside
+     (`knowledge.db.old-<version>`) and re-indexes automatically; the user sees a
+     slower first run, not an error. The `KGMeta` stamp tells the new binary what the
+     old graph reflected.
+  2. **Hand-written knowledge — a logical write journal.** Every hand-write (`kg add
+     entity/observation/link`, the MCP `add_entity` / `add_observation` /
+     `link_entities` tools, and all personal-store writes) also appends one JSON line
+     to `<db>.journal.jsonl` beside the database. The journal is
+     engine-format-independent; after an engine bump, the new binary replays it into
+     the fresh database — no old binary needed, ever. Writes of this kind are rare and
+     small, so the dual-write cost is negligible. Replay caveat: entity UUIDs are
+     regenerated on re-index, so journal entries must identify entities by
+     `(name, type, project)` and re-resolve at replay, not by raw UUID. Compaction
+     (rewriting the journal as a current-state dump) rides along with `kg export`.
+  3. **Transition-generation safety net.** Databases created before journaling shipped
+     have nothing to replay. For that one boundary, `install.py` retains the outgoing
+     binary (e.g. `~/.kg/bin/kg-<oldver>`) and auto-migration shells out to it for an
+     export — Kuzu's native `EXPORT DATABASE` / `IMPORT DATABASE` exists for exactly
+     this. Vestigial once journaling has shipped.
+
+  The hub migrates itself: CI re-pushes after upgrading, the seed version gate keeps
+  mixed-format snapshots out, and the registry's `kgVersion` names any graph still
+  awaiting re-push.
+
+  **Ordering constraint:** journaling must ship while the current Kuzu version is
+  still current — before any format-breaking bump — so every adopter's store has a
+  journal by the time one arrives. This promotes journaling ahead of "later" in the
+  phase plan.
+
 ## Rollout phases
 
 1. **Foundations (no hub, behavior-neutral):** `SearchLayer` interface in `kglib`;
@@ -311,7 +359,11 @@ Notes that apply everywhere:
    Integration test: seed two layered graphs from a scope config, search over HTTP.
 3. **Client:** `RemoteLayer`, `remotes` in scope config, `kg hub status`. User-facing
    doc (`kg-shared-service.md`) + cross-links from kg-scopes.md and README.
-4. **Later:** incremental reseed; hub-side query embedding; `Source` field on
+4. **Durability (must land before any Kuzu bump):** the hand-write journal +
+   format-mismatch auto-rebuild/replay, `kg export`/`kg import` (JSONL round-trip;
+   doubles as journal compaction and personal-store backup), and installer retention
+   of the outgoing binary — see "Migrating existing databases".
+5. **Later:** incremental reseed; hub-side query embedding; `Source` field on
    `SearchResult` for provenance display; per-graph tokens; offline read cache if a
    team wants search on planes.
 
