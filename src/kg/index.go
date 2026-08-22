@@ -178,6 +178,22 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 		fmt.Printf("   Duration:          %.3fs\n", time.Since(appStart).Seconds())
 	}
 
+	// Stamp provenance so the database records which commit it reflects
+	// (docs/kg-shared-service-design.md, Phase 1).
+	if meta, err := knowledge.StampMeta(store, projectID, root, Version); err != nil {
+		fmt.Printf("Warning: recording KGMeta stamp failed: %v\n", err)
+	} else if meta.Commit != "" {
+		short := meta.Commit
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		dirty := ""
+		if meta.Dirty {
+			dirty = " (dirty)"
+		}
+		fmt.Printf("🏷️  Provenance: commit %s%s\n", short, dirty)
+	}
+
 	fmt.Printf("✅ Total duration: %.3fs\n", time.Since(start).Seconds())
 	return nil
 }

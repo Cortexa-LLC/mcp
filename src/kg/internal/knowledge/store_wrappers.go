@@ -11,6 +11,7 @@ type (
 	SearchResult = kglib.SearchResult
 	SearchConfig = kglib.SearchConfig
 	Embedder     = kglib.Embedder
+	KGMeta       = kglib.KGMeta
 )
 
 // OpenStore opens a kg store with the kg-specific schema configuration
