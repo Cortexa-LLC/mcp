@@ -6,6 +6,18 @@ import (
 	"sort"
 )
 
+// SearchLayer is anything that can answer a federated search: a local Kuzu
+// *Store, or (in future phases) a remote hub graph queried over HTTP. Only
+// search federates — writes always go to the primary local store — so the
+// interface is deliberately this small.
+type SearchLayer interface {
+	HybridSearch(projectID, query string, queryEmbedding []float32, config SearchConfig) ([]*SearchResult, error)
+	Close() error
+}
+
+// compile-time check: a local store is a valid federation layer
+var _ SearchLayer = (*Store)(nil)
+
 // FederatedStore wraps multiple stores to enable cross-layer queries.
 // Each layer is a separate KG database, with priority determining precedence
 // when merging results (higher priority wins for duplicate entities).
@@ -15,7 +27,7 @@ type FederatedStore struct {
 
 type layeredStore struct {
 	name      string
-	store     *Store
+	store     SearchLayer
 	priority  int
 	projectID string
 }
@@ -23,7 +35,7 @@ type layeredStore struct {
 // LayerConfig describes a database layer for federation
 type LayerConfig struct {
 	Name     string
-	Store    *Store
+	Store    SearchLayer
 	Priority int
 
 	// ProjectID optionally overrides the project ID used when querying this
@@ -65,12 +77,16 @@ func (fs *FederatedStore) Close() error {
 	return firstErr
 }
 
-// PrimaryStore returns the primary (highest priority) store for write operations
+// PrimaryStore returns the primary (highest priority) layer's local store for
+// write operations, or nil if there are no layers or the primary layer is not
+// a local *Store. Remote layers are read-only by design and are never the
+// write target, so callers configure a local store as the final layer.
 func (fs *FederatedStore) PrimaryStore() *Store {
 	if len(fs.layers) == 0 {
 		return nil
 	}
-	return fs.layers[len(fs.layers)-1].store
+	store, _ := fs.layers[len(fs.layers)-1].store.(*Store)
+	return store
 }
 
 // HybridSearch performs hybrid search across all layers and merges results.
