@@ -63,8 +63,22 @@ func saveRegistry(dataDir string, r *Registry) error {
 
 	path := filepath.Join(dataDir, registryFile)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
 		return fmt.Errorf("write registry: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("write registry: %w", err)
+	}
+	// fsync before the rename: without it a crash can commit an empty or
+	// truncated registry.json.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync registry: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close registry: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("commit registry: %w", err)

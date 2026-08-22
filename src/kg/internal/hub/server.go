@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,14 @@ import (
 // graphNameRE constrains graph names: they become filesystem path components.
 var graphNameRE = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 
+// validPathComponent reports whether name is safe as a single filesystem path
+// component. The regex alone admits "." and ".." — path navigation, not names —
+// so they are rejected explicitly. Everything the hub joins into a path (graph
+// names, commit hashes, layer names) must pass this.
+func validPathComponent(name string) bool {
+	return graphNameRE.MatchString(name) && name != "." && name != ".."
+}
+
 // Server hosts read-only knowledge graphs under dataDir and answers search
 // queries over HTTP.
 type Server struct {
@@ -34,11 +43,40 @@ type Server struct {
 // NewServer creates a hub server rooted at dataDir. An empty readToken leaves
 // reads unauthenticated; an empty seedToken disables seeding entirely.
 func NewServer(dataDir, readToken, seedToken, kgVersion string) *Server {
-	return &Server{
+	s := &Server{
 		dataDir:   dataDir,
 		readToken: readToken,
 		seedToken: seedToken,
 		kgVersion: kgVersion,
+	}
+	s.sweepStaging()
+	return s
+}
+
+// sweepStaging removes staging leftovers (.tmp-*, .old-*, current.tmp-*) from
+// every graph directory. A crash mid-seed strands them, and prune deliberately
+// skips those prefixes; at construction time no seed is in flight (the hub is
+// single-node by design), so anything with a staging prefix is garbage.
+func (s *Server) sweepStaging() {
+	graphs, err := os.ReadDir(filepath.Join(s.dataDir, "graphs"))
+	if err != nil {
+		return
+	}
+	for _, g := range graphs {
+		if !g.IsDir() {
+			continue
+		}
+		gdir := filepath.Join(s.dataDir, "graphs", g.Name())
+		entries, err := os.ReadDir(gdir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if strings.HasPrefix(n, ".tmp-") || strings.HasPrefix(n, ".old-") || strings.HasPrefix(n, "current.tmp-") {
+				_ = os.RemoveAll(filepath.Join(gdir, n))
+			}
+		}
 	}
 }
 
@@ -136,10 +174,18 @@ func (s *Server) loadRegistryLocked() (*Registry, error) {
 	return loadRegistry(s.dataDir)
 }
 
+// internalError logs the real error server-side and returns a generic message:
+// error strings from the storage layer embed filesystem paths, which are not
+// the client's business.
+func internalError(w http.ResponseWriter, what string, err error) {
+	log.Printf("%s: %v", what, err)
+	writeError(w, http.StatusInternalServerError, what)
+}
+
 func (s *Server) handleListGraphs(w http.ResponseWriter, r *http.Request) {
 	reg, err := s.loadRegistryLocked()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, "load registry", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"graphs": reg.Graphs})
@@ -149,7 +195,7 @@ func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	reg, err := s.loadRegistryLocked()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, "load registry", err)
 		return
 	}
 	info, ok := reg.Graphs[name]
@@ -203,6 +249,12 @@ func (s *Server) searchGraph(name string, info *GraphInfo, query string, limit i
 
 func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	// Defense in depth: registry membership already gates unknown names, but
+	// this name is joined into a filesystem path — never do that unvalidated.
+	if !validPathComponent(name) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid graph name %q", name))
+		return
+	}
 	req, err := decodeSearchRequest(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -210,7 +262,7 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	reg, err := s.loadRegistryLocked()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, "load registry", err)
 		return
 	}
 	info, ok := reg.Graphs[name]
@@ -220,7 +272,7 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := s.searchGraph(name, info, req.Query, req.Limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, fmt.Sprintf("search graph %q", name), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -239,7 +291,7 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	reg, err := s.loadRegistryLocked()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, "load registry", err)
 		return
 	}
 
@@ -262,7 +314,8 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 		info := reg.Graphs[name]
 		results, err := s.searchGraph(name, info, req.Query, req.Limit)
 		if err != nil {
-			out[name] = map[string]any{"commit": info.Commit, "error": err.Error()}
+			log.Printf("federated search graph %q: %v", name, err)
+			out[name] = map[string]any{"commit": info.Commit, "error": "search failed"}
 			continue
 		}
 		out[name] = map[string]any{"commit": info.Commit, "results": results}
@@ -291,13 +344,19 @@ func majorMinor(v string) string {
 
 func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !graphNameRE.MatchString(name) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid graph name %q: must match %s", name, graphNameRE.String()))
+	if !validPathComponent(name) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid graph name %q: must match %s and not be . or ..", name, graphNameRE.String()))
 		return
 	}
 	commit := r.Header.Get("X-KG-Commit")
 	if commit == "" {
 		writeError(w, http.StatusBadRequest, "missing required header X-KG-Commit")
+		return
+	}
+	// The commit becomes a path component (graphs/<name>/<commit>/) and the
+	// `current` symlink target — never join it unvalidated.
+	if !validPathComponent(commit) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid X-KG-Commit %q: must match %s and not be . or ..", commit, graphNameRE.String()))
 		return
 	}
 	projectID := r.Header.Get("X-KG-Project-ID")
@@ -334,17 +393,36 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 	if layers := r.Header.Get("X-KG-Layers"); layers != "" {
 		for _, l := range strings.Split(layers, ",") {
 			if l = strings.TrimSpace(l); l != "" {
+				// Layer names are graph references and may be joined into
+				// paths by consumers of the registry — hold them to the same
+				// standard as graph names.
+				if !validPathComponent(l) {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid layer name %q in X-KG-Layers", l))
+					return
+				}
 				info.Layers = append(info.Layers, l)
 			}
 		}
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	// Stage (unpack + validate) WITHOUT holding s.mu: the body read is paced by
+	// the network, and holding the lock across it would let one slow push stall
+	// every read handler. Only the install step below needs the lock.
 	body := http.MaxBytesReader(w, r.Body, maxExtractBytes)
-	if err := s.seed(name, commit, info, body); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	tmpDir, err := s.stage(name, body)
+	if err != nil {
+		log.Printf("seed %s@%s: staging failed: %v", name, commit, err)
+		writeError(w, http.StatusBadRequest, "pushed archive failed staging (invalid archive or database)")
+		return
+	}
+
+	s.mu.Lock()
+	err = s.install(name, commit, info, tmpDir)
+	s.mu.Unlock()
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		log.Printf("seed %s@%s: install failed: %v", name, commit, err)
+		writeError(w, http.StatusInternalServerError, "seeding failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -354,19 +432,20 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// seed unpacks, validates, and atomically installs a pushed database, then
-// prunes stale commit directories and updates the registry. Caller holds s.mu.
-func (s *Server) seed(name, commit string, info *GraphInfo, body io.Reader) (err error) {
+// stage unpacks a pushed archive into a fresh temp dir inside the graph
+// directory (so the later rename is atomic, same filesystem) and validates
+// that the extracted database opens. It does NOT take s.mu — staging is paced
+// by the network body and must not block readers. On error the temp dir is
+// removed; on success the caller owns it.
+func (s *Server) stage(name string, body io.Reader) (tmpDir string, err error) {
 	gdir := s.graphDir(name)
 	if err := os.MkdirAll(gdir, 0755); err != nil {
-		return fmt.Errorf("create graph directory: %w", err)
+		return "", fmt.Errorf("create graph directory: %w", err)
 	}
 
-	// Extract into a temp dir inside the graph directory so the final rename
-	// is atomic (same filesystem).
-	tmpDir := filepath.Join(gdir, ".tmp-"+randomSuffix())
+	tmpDir = filepath.Join(gdir, ".tmp-"+randomSuffix())
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return fmt.Errorf("create staging directory: %w", err)
+		return "", fmt.Errorf("create staging directory: %w", err)
 	}
 	defer func() {
 		if err != nil {
@@ -375,17 +454,25 @@ func (s *Server) seed(name, commit string, info *GraphInfo, body io.Reader) (err
 	}()
 
 	if err := UnpackDB(body, tmpDir); err != nil {
-		return fmt.Errorf("unpack archive: %w", err)
+		return "", fmt.Errorf("unpack archive: %w", err)
 	}
 
 	// Validate the extracted database opens before installing it.
 	store, err := knowledge.OpenStoreReadOnly(filepath.Join(tmpDir, canonicalDBName))
 	if err != nil {
-		return fmt.Errorf("pushed database failed validation: %w", err)
+		return "", fmt.Errorf("pushed database failed validation: %w", err)
 	}
 	if err := store.Close(); err != nil {
-		return fmt.Errorf("close validated database: %w", err)
+		return "", fmt.Errorf("close validated database: %w", err)
 	}
+	return tmpDir, nil
+}
+
+// install atomically installs a staged database as graphs/<name>/<commit>,
+// repoints `current`, prunes stale commit directories, and updates the
+// registry. Caller holds s.mu and owns tmpDir until install returns.
+func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) (err error) {
+	gdir := s.graphDir(name)
 
 	// If this commit was pushed before, move the existing dir aside so the
 	// rename succeeds; restore it if the swap fails half-way.

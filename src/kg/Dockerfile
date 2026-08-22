@@ -17,7 +17,8 @@ WORKDIR /src/kg
 RUN CGO_ENABLED=1 go build -o /out/kg .
 
 FROM debian:stable-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
+# libstdc++6: the cgo Kuzu engine links the C++ runtime, which slim lacks
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git libstdc++6 && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/kg /usr/local/bin/kg
 VOLUME /data
 EXPOSE 7411

@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -219,13 +221,11 @@ func TestHubPushListSearchPrune(t *testing.T) {
 				commitDirs = append(commitDirs, e.Name())
 			}
 		}
-		if len(commitDirs) != 2 {
-			t.Errorf("commit dirs after third push = %v, want [%s %s]", commitDirs, commitB, commitC)
-		}
-		for _, d := range commitDirs {
-			if d == commitA {
-				t.Errorf("oldest commit dir %s should have been pruned", commitA)
-			}
+		sort.Strings(commitDirs)
+		want := []string{commitB, commitC}
+		sort.Strings(want)
+		if !slices.Equal(commitDirs, want) {
+			t.Errorf("commit dirs after third push = %v, want exactly %v", commitDirs, want)
 		}
 	})
 }
@@ -387,5 +387,119 @@ func TestPackUnpackRoundTrip(t *testing.T) {
 	got, err = os.ReadFile(filepath.Join(dest, "knowledge.db.wal"))
 	if err != nil || string(got) != "wal-bytes" {
 		t.Errorf("knowledge.db.wal = %q, %v", got, err)
+	}
+}
+
+// rawSeed sends a PUT seed request with arbitrary graph path segment and
+// headers, bypassing the client's own validation, to exercise the server's
+// hostile-metadata handling. The body is irrelevant: validation must reject
+// the request before staging.
+func rawSeed(t *testing.T, hubURL, graphSegment, commit string, extraHeaders map[string]string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, hubURL+"/v1/graphs/"+graphSegment, strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer s3cret")
+	req.Header.Set("X-KG-Commit", commit)
+	req.Header.Set("X-KG-Project-ID", "monorepo")
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", graphSegment, err)
+	}
+	resp.Body.Close()
+	return resp
+}
+
+// TestSeedRejectsHostileMetadata covers the metadata-as-path attacks: commit
+// hashes and graph/layer names are joined into filesystem paths and symlink
+// targets, so traversal sequences must be rejected before any path is formed.
+func TestSeedRejectsHostileMetadata(t *testing.T) {
+	ts, dataDir := newTestHub(t, "", "s3cret", "dev")
+
+	assertDataDirIntact := func(t *testing.T) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(dataDir, "evil")); err == nil {
+			t.Fatal("traversal escaped: dataDir/evil exists")
+		}
+		if entries, err := os.ReadDir(dataDir); err == nil {
+			for _, e := range entries {
+				if e.Name() != "graphs" && e.Name() != "registry.json" {
+					t.Errorf("unexpected entry in data dir: %s", e.Name())
+				}
+			}
+		}
+	}
+
+	t.Run("commit traversal", func(t *testing.T) {
+		for _, commit := range []string{"../../evil", "..", ".", "a/b", "%2e%2e"} {
+			resp := rawSeed(t, ts.URL, "g", commit, nil)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("commit %q: status = %d, want 400", commit, resp.StatusCode)
+			}
+		}
+		assertDataDirIntact(t)
+	})
+
+	t.Run("dot-dot graph name", func(t *testing.T) {
+		// %2e%2e survives URL cleaning and decodes to ".." in PathValue —
+		// the literal "../" form is normalized away by path cleaning before
+		// routing, so the encoded form is the one that reaches the handler.
+		for _, seg := range []string{"%2e%2e", "%2e", "..%2fx"} {
+			resp := rawSeed(t, ts.URL, seg, commitA, nil)
+			if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusNotFound &&
+				resp.StatusCode != http.StatusMovedPermanently {
+				t.Errorf("graph segment %q: status = %d, want 400/404/301", seg, resp.StatusCode)
+			}
+		}
+		// Whatever the router did, nothing may have escaped or destroyed data.
+		assertDataDirIntact(t)
+		if _, err := os.Stat(filepath.Join(dataDir, "graphs")); os.IsNotExist(err) {
+			// graphs/ may legitimately not exist yet (no successful seed);
+			// the point is the registry must not have been deleted by prune.
+			t.Log("graphs/ absent (no successful seed) — acceptable")
+		}
+	})
+
+	t.Run("hostile layer names", func(t *testing.T) {
+		resp := rawSeed(t, ts.URL, "g", commitA, map[string]string{"X-KG-Layers": "ok,../bad"})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("hostile layer name: status = %d, want 400", resp.StatusCode)
+		}
+		assertDataDirIntact(t)
+	})
+
+	t.Run("search path validation", func(t *testing.T) {
+		resp, _ := postJSON(t, ts.URL+"/v1/graphs/%2e%2e/search", map[string]any{"query": "x"})
+		if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusNotFound {
+			t.Errorf("search on ..: status = %d, want 400/404", resp.StatusCode)
+		}
+	})
+}
+
+// TestSweepStaging verifies that stranded staging directories are removed at
+// server construction.
+func TestSweepStaging(t *testing.T) {
+	dataDir := t.TempDir()
+	gdir := filepath.Join(dataDir, "graphs", "g")
+	for _, n := range []string{".tmp-dead", ".old-dead", "current.tmp-dead", commitA} {
+		if err := os.MkdirAll(filepath.Join(gdir, n), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = NewServer(dataDir, "", "s3cret", "dev")
+	entries, err := os.ReadDir(gdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if !slices.Equal(names, []string{commitA}) {
+		t.Errorf("after sweep: %v, want only [%s]", names, commitA)
 	}
 }
