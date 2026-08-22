@@ -289,6 +289,91 @@ it — it holds hand-written knowledge, not indexed source. Full guide:
 
 ---
 
+### `kg push`
+
+Push already-indexed scope databases to a shared knowledge hub (see
+`kg hub serve`). Each graph carries its provenance stamp — git commit, repo
+URL, dirty flag — and its scope's layer topology, so the hub knows exactly
+which commit each graph reflects. Requires `KG_HUB_SEED_TOKEN` in the
+environment.
+
+```bash
+KG_HUB_SEED_TOKEN=... kg push --hub http://hub.internal:7411   # default scope
+kg push --all-scopes                    # every scope; hub from .ai/config.json
+kg push --scope platform                # one scope
+kg push --graph monorepo-platform       # rename the graph on the hub (single db only)
+kg push --commit <sha>                  # override the recorded commit
+kg push --allow-dirty                   # push despite a dirty-tree stamp
+```
+
+The hub URL comes from `--hub` or the `"hub"` key in `.ai/config.json`.
+Databases indexed before provenance stamps existed fall back to the current
+git HEAD with a warning — re-run `kg index` to stamp them. A database stamped
+`(dirty)` is refused unless `--allow-dirty` is passed.
+
+```
+⬆️  platform @ 3f2a91c04b7d → http://hub.internal:7411
+⬆️  team-a @ 3f2a91c04b7d → http://hub.internal:7411
+✅ Pushed 2 graph(s)
+```
+
+---
+
+### `kg hub serve`
+
+Run a shared knowledge hub: an HTTP service hosting read-only knowledge
+graphs seeded with `kg push`. Teams push their scope databases; anyone with
+read access can search them without cloning or indexing the source.
+
+```bash
+KG_HUB_SEED_TOKEN=... kg hub serve                     # listen on :7411, data in ~/.kg-hub
+kg hub serve --listen 127.0.0.1:8080 --data /srv/kg    # explicit address and storage
+```
+
+| Flag / Variable | Effect |
+|-----------------|--------|
+| `--listen` | Listen address (default `:7411`) |
+| `--data` | Data directory (default `$KG_HUB_HOME`, else `~/.kg-hub`) |
+| `KG_HUB_READ_TOKEN` | Bearer token required for reads; unset = open reads |
+| `KG_HUB_SEED_TOKEN` | Bearer token required for `kg push`; unset = seeding disabled |
+
+HTTP API (reads take `Authorization: Bearer <read-token>` when configured):
+
+| Route | Purpose |
+|-------|---------|
+| `GET /healthz` | Liveness check, no auth |
+| `GET /v1/graphs` | List hosted graphs with provenance |
+| `GET /v1/graphs/{name}` | One graph's provenance |
+| `POST /v1/graphs/{name}/search` | `{"query": "...", "limit": 20}` → ranked results |
+| `POST /v1/search` | Same body plus optional `"graphs": [...]` — search many graphs |
+| `PUT /v1/graphs/{name}` | Seed a graph (used by `kg push`) |
+
+Each push is stored under `graphs/<name>/<commit>/` and swapped in atomically;
+the previous commit is kept for rollback and older ones are pruned. A
+`src/kg/Dockerfile` is provided for container deployment (build from the
+repo's `src/` directory: `docker build -f kg/Dockerfile .`).
+
+---
+
+### `kg hub list`
+
+List the graphs hosted on a hub, with the commit each was indexed from.
+
+```bash
+kg hub list --hub http://hub.internal:7411
+kg hub list                              # hub from .ai/config.json
+```
+
+```
+NAME      COMMIT                INDEXED           LAYERS    PROJECT
+platform  3f2a91c04b7d          2026-08-20 09:14            monorepo
+team-a    9c81d2e4f0aa (dirty)  2026-08-20 10:02  platform  monorepo
+```
+
+Uses `KG_HUB_READ_TOKEN` from the environment when the hub requires read auth.
+
+---
+
 ### Not yet implemented
 
 These commands are registered but are placeholders — they print
@@ -425,5 +510,8 @@ MATCH (e) WHERE NOT ()-[]->(e) RETURN e.name, e.type LIMIT 20
 | `OPENAI_API_KEY` | Enables OpenAI embeddings for semantic (vector) search |
 | `OLLAMA_HOST` | Enables Ollama embeddings (default: `http://localhost:11434`) |
 | `KG_HOME` | Directory holding the personal knowledge store (default: `~/.kg`) |
+| `KG_HUB_HOME` | Data directory for `kg hub serve` (default: `~/.kg-hub`) |
+| `KG_HUB_READ_TOKEN` | Read token: required by `kg hub serve` clients, sent by `kg hub list` |
+| `KG_HUB_SEED_TOKEN` | Seed token: enables seeding on `kg hub serve`, required by `kg push` |
 
 Embeddings are optional. Without them, `kg search` uses keyword matching only.
