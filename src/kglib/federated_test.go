@@ -291,6 +291,77 @@ func TestFederatedStore_SurvivesFailingLayer(t *testing.T) {
 	}
 }
 
+// fakeLayer is a SearchLayer backed by canned results, exercising federation
+// with a non-*Store layer the way a future remote hub layer would plug in.
+type fakeLayer struct{ results []*SearchResult }
+
+func (f *fakeLayer) HybridSearch(projectID, query string, emb []float32, cfg SearchConfig) ([]*SearchResult, error) {
+	return f.results, nil
+}
+
+func (f *fakeLayer) Close() error { return nil }
+
+func fakeResult(id string, score float64) *SearchResult {
+	return &SearchResult{
+		Entity:    &Entity{ID: id, Name: id},
+		Score:     score,
+		MatchType: "keyword",
+	}
+}
+
+// A custom SearchLayer implementation participates in merging exactly like a
+// local store: higher priority wins for duplicates, equal priorities sum
+// scores, and the merged set is sorted by score descending.
+func TestFederatedStoreCustomSearchLayer(t *testing.T) {
+	low := &fakeLayer{results: []*SearchResult{
+		fakeResult("function:auth.go:validate", 0.9),
+		fakeResult("function:auth.go:shared", 0.3),
+	}}
+	// Same priority as `low`, sharing one entity with it → scores sum.
+	peer := &fakeLayer{results: []*SearchResult{
+		fakeResult("function:auth.go:shared", 0.3),
+	}}
+	// Higher priority, duplicating `validate` → its result wins outright.
+	high := &fakeLayer{results: []*SearchResult{
+		fakeResult("function:auth.go:validate", 0.2),
+	}}
+
+	fs := NewFederatedStore([]LayerConfig{
+		{Name: "low", Store: low, Priority: 1},
+		{Name: "peer", Store: peer, Priority: 1},
+		{Name: "high", Store: high, Priority: 2},
+	})
+
+	results, err := fs.KeywordSearch("proj", "auth", 20)
+	if err != nil {
+		t.Fatalf("KeywordSearch: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 merged results, got %d (%v)", len(results), resultNames(results))
+	}
+
+	byID := make(map[string]*SearchResult, len(results))
+	for _, r := range results {
+		byID[r.Entity.ID] = r
+	}
+
+	// Duplicate across different priorities: the higher-priority layer's
+	// result (score 0.2) replaces the lower-priority one (0.9).
+	if got := byID["function:auth.go:validate"].Score; got != 0.2 {
+		t.Errorf("expected higher-priority layer's score 0.2 for validate, got %f", got)
+	}
+	// Duplicate at equal priority: scores sum (0.3 + 0.3).
+	if got := byID["function:auth.go:shared"].Score; got != 0.6 {
+		t.Errorf("expected summed score 0.6 for shared, got %f", got)
+	}
+
+	for i := 1; i < len(results); i++ {
+		if results[i-1].Score < results[i].Score {
+			t.Fatalf("results not sorted by score: %f before %f", results[i-1].Score, results[i].Score)
+		}
+	}
+}
+
 // PrimaryStore returns the highest-priority (last) layer, and nil when empty.
 func TestFederatedStore_PrimaryStore(t *testing.T) {
 	base := newLayerStore(t, "base")

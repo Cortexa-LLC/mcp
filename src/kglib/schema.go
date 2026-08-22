@@ -62,6 +62,18 @@ func (s *Store) initSchema(cfg *SchemaConfig) error {
 
 		// Structural edge (not in allowedRelTypes – it is managed internally)
 		`CREATE REL TABLE IF NOT EXISTS HAS_OBSERVATION(FROM Entity TO Observation)`,
+
+		// Provenance stamp: which commit/repo this database was indexed from.
+		// One row per project_id. Written by SetMeta at index time.
+		`CREATE NODE TABLE IF NOT EXISTS KGMeta(
+			project_id STRING PRIMARY KEY,
+			repo_url STRING,
+			commit_hash STRING,
+			dirty BOOLEAN,
+			indexed_at TIMESTAMP,
+			embed_model STRING,
+			kg_version STRING
+		)`,
 	}
 
 	// Derive relationship-table DDL from the configured relation types

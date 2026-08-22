@@ -134,6 +134,33 @@ kg stats --personal            # size of the personal store
 
 ---
 
+### `kg meta`
+
+Show the provenance stamp `kg index` records into the database: which repo and
+commit it was built from, when, and a staleness check against the local HEAD.
+
+```bash
+kg meta
+kg meta --scope platform     # stamp for one scope's database
+```
+
+```
+Project:     my-repo
+Database:    /path/to/my-repo/.ai/knowledge.db
+Repo:        git@github.com:org/my-repo.git
+Commit:      3f2a91c04b7d8e6f15c2a90d4e7b6a3c8d1f0e25
+Indexed at:  2026-08-20 09:14:03 PDT
+Embed model: (not set)
+kg version:  dev
+Staleness:   local HEAD is 2 commit(s) ahead of the indexed commit
+```
+
+`(dirty)` after the commit means the working tree had uncommitted changes at
+index time. Databases indexed before this stamp existed print a hint to re-run
+`kg index`.
+
+---
+
 ### `kg show <entity-id>`
 
 Show a single entity with its relations and observations.
