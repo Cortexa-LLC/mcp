@@ -224,6 +224,28 @@ func GetDefaultScope(aiDir string) (string, error) {
 	return config.DefaultScope, nil
 }
 
+// GetHubURL reads the shared knowledge hub URL from .ai/config.json ("hub" key).
+// Returns empty string if no hub is configured.
+func GetHubURL(aiDir string) (string, error) {
+	configPath := filepath.Join(aiDir, "config.json")
+	data, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read config: %w", err)
+	}
+
+	var config struct {
+		Hub string `json:"hub"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", fmt.Errorf("parse config: %w", err)
+	}
+
+	return config.Hub, nil
+}
+
 // SetDefaultScope sets the default scope in .ai/config.json
 func SetDefaultScope(aiDir, scopeName string) error {
 	configPath := filepath.Join(aiDir, "config.json")

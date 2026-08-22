@@ -23,19 +23,29 @@ func StampMeta(store *Store, projectID, root, kgVersion string) (*KGMeta, error)
 		EmbedModel: os.Getenv("KNOWLEDGE_EMBED_MODEL"),
 		KGVersion:  kgVersion,
 	}
-	if out, err := gitOutput(root, "rev-parse", "HEAD"); err == nil {
-		meta.Commit = out
-		// remote.origin.url may legitimately be absent (no remote configured);
-		// the ignored error is deliberate.
-		meta.RepoURL, _ = gitOutput(root, "config", "--get", "remote.origin.url")
-		if status, err := gitOutput(root, "status", "--porcelain"); err == nil && status != "" {
-			meta.Dirty = true
-		}
-	}
+	meta.Commit, meta.RepoURL, meta.Dirty = GitProvenance(root)
 	if err := store.SetMeta(meta); err != nil {
 		return nil, err
 	}
 	return &meta, nil
+}
+
+// GitProvenance inspects root's git state and returns the HEAD commit, the
+// origin URL, and whether the working tree is dirty. Best-effort: a non-git
+// root returns an empty commit rather than an error.
+func GitProvenance(root string) (commit, repoURL string, dirty bool) {
+	out, err := gitOutput(root, "rev-parse", "HEAD")
+	if err != nil {
+		return "", "", false
+	}
+	commit = out
+	// remote.origin.url may legitimately be absent (no remote configured);
+	// the ignored error is deliberate.
+	repoURL, _ = gitOutput(root, "config", "--get", "remote.origin.url")
+	if status, err := gitOutput(root, "status", "--porcelain"); err == nil && status != "" {
+		dirty = true
+	}
+	return commit, repoURL, dirty
 }
 
 func gitOutput(dir string, args ...string) (string, error) {
