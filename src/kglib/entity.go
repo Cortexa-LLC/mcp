@@ -112,7 +112,7 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 	if err := s.appendJournal(JournalRecord{
 		Op:        OpCreateEntity,
 		ProjectID: projectID,
-		Entity:    &EntityRef{Name: name, Type: entityType},
+		Entity:    &EntityRef{Name: name, Type: entityType, ID: stableIDHint(entity.ID)},
 	}); err != nil {
 		return entity, errJournalNote(err)
 	}
@@ -220,6 +220,40 @@ func (s *Store) GetEntityByNameAndType(name, entityType, projectID string) (*Ent
 	return entity, nil
 }
 
+// FindEntitiesByNameAndType returns every entity matching the tuple.
+//
+// Separate from GetEntityByNameAndType, which takes the first match, because
+// the tuple is not unique — indexed code symbols share it across files — and a
+// caller resolving a journal record needs to know when it is choosing
+// arbitrarily rather than resolving.
+func (s *Store) FindEntitiesByNameAndType(name, entityType, projectID string) ([]*Entity, error) {
+	result, err := s.QueryParams(`
+		MATCH (e:Entity)
+		WHERE e.name = $name AND e.type = $type AND e.project_id = $project_id
+		RETURN `+s.entityColumns()+`
+		ORDER BY e.id
+	`, map[string]any{"name": name, "type": entityType, "project_id": projectID})
+	if err != nil {
+		return nil, fmt.Errorf("query entities by name and type: %w", err)
+	}
+	defer result.Close()
+
+	var entities []*Entity
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return nil, fmt.Errorf("get next: %w", err)
+		}
+		row, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return nil, fmt.Errorf("get row: %w", err)
+		}
+		entities = append(entities, entityFromRow(row))
+	}
+	return entities, nil
+}
+
 // ListEntities retrieves all entities for a project, optionally filtered by type
 func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 	stmt := `
@@ -287,7 +321,7 @@ func (s *Store) DeleteEntity(id, projectID string) error {
 	if err := s.appendJournal(JournalRecord{
 		Op:        OpDeleteEntity,
 		ProjectID: projectID,
-		Entity:    &EntityRef{Name: entity.Name, Type: entity.Type},
+		Entity:    entityRef(entity),
 	}); err != nil {
 		return errJournalNote(err)
 	}

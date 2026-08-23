@@ -371,3 +371,80 @@ func TestImportPreservesProjectWhenNotOverridden(t *testing.T) {
 		t.Fatalf("entity not imported under its recorded project: %v", err)
 	}
 }
+
+// Importing a database's own journal would append every applied record back
+// into the file being read; a create/delete pair then re-applies forever.
+// `kg export --journal` produces a deliberately journal-shaped file, so this is
+// a plausible thing to type.
+func TestImportRefusesTheDatabasesOwnJournal(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "knowledge.db")
+
+	store, err := OpenStore(dbPath, testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	store.EnableJournal()
+
+	entity, err := store.CreateEntity("retry-policy", "decision", "p")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := store.DeleteEntity(entity.ID, "p"); err != nil {
+		t.Fatalf("DeleteEntity: %v", err)
+	}
+
+	before, err := os.ReadFile(JournalPath(dbPath))
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+
+	_, err = store.ImportRecords(JournalPath(dbPath), "p")
+	if err == nil {
+		t.Fatal("importing the database's own journal was allowed; that loop does not terminate")
+	}
+	if !strings.Contains(err.Error(), "journal") {
+		t.Errorf("error does not explain the problem: %v", err)
+	}
+
+	after, err := os.ReadFile(JournalPath(dbPath))
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("journal grew from %d to %d bytes despite the refusal", len(before), len(after))
+	}
+}
+
+// A journal belonging to a *different* database is a legitimate import.
+func TestImportAcceptsAnotherDatabasesJournal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	sourcePath := filepath.Join(tmpDir, "source.db")
+	source, err := OpenStore(sourcePath, testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	source.EnableJournal()
+	if _, err := source.CreateEntity("retry-policy", "decision", "p"); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	source.Close()
+
+	targetPath := filepath.Join(tmpDir, "target.db")
+	target, err := OpenStore(targetPath, testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer target.Close()
+	target.EnableJournal()
+
+	stats, err := target.ImportRecords(JournalPath(sourcePath), "p")
+	if err != nil {
+		t.Fatalf("importing another database's journal was refused: %v", err)
+	}
+	if stats.Applied != 1 {
+		t.Errorf("applied = %d, want 1", stats.Applied)
+	}
+}

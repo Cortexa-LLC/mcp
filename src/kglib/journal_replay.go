@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Journal replay.
@@ -39,6 +40,26 @@ type ReplayStats struct {
 	Failed   int // records that could not be applied
 	Errors   []error
 	Implicit int // entities created to host a record whose target was missing
+	// Ambiguous counts records resolved by (name, type) where more than one
+	// entity matched, so the target was chosen rather than identified.
+	Ambiguous   int
+	Ambiguities []string
+}
+
+// maxAmbiguityNotes bounds the retained detail; the count stays exact.
+const maxAmbiguityNotes = 10
+
+func (r *ReplayStats) noteAmbiguity(ref EntityRef, matches []*Entity) {
+	if len(r.Ambiguities) >= maxAmbiguityNotes {
+		return
+	}
+	ids := make([]string, 0, len(matches))
+	for _, m := range matches {
+		ids = append(ids, m.ID)
+	}
+	r.Ambiguities = append(r.Ambiguities, fmt.Sprintf(
+		"%q (%s) matched %d entities, attached to %s: %s",
+		ref.Name, ref.Type, len(matches), matches[0].ID, strings.Join(ids, ", ")))
 }
 
 // maxReplayErrors bounds how many individual failures are retained. The count
@@ -82,7 +103,36 @@ func (s *Store) ReplayJournal(path string) (ReplayStats, error) {
 // worse outcome than a clear failure. Callers restoring into a given graph pass
 // that graph's project ID; passing "" preserves whatever the file says.
 func (s *Store) ImportRecords(path, projectID string) (ReplayStats, error) {
+	// Importing a database's own journal would append every applied record back
+	// into the file the scanner is still reading, and a create/delete pair
+	// re-applies forever — an unbounded loop that grows the journal until the
+	// disk fills. `kg export --journal` writes a file that is deliberately
+	// journal-shaped, so this is a plausible thing to type rather than a
+	// contrived one.
+	if s.journal != nil {
+		same, err := sameFile(path, s.journal.Path())
+		if err == nil && same {
+			return ReplayStats{}, fmt.Errorf(
+				"refusing to import %s into the database it is the journal for: "+
+					"every applied record would be appended back to the file being read. "+
+					"Replay it with a rebuild instead, or copy it elsewhere first", path)
+		}
+	}
 	return s.replay(path, true, projectID)
+}
+
+// sameFile reports whether two paths refer to the same file on disk, following
+// symlinks and surviving "./x" versus "x" — string comparison would not.
+func sameFile(a, b string) (bool, error) {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false, err
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(fa, fb), nil
 }
 
 func (s *Store) replay(path string, keepJournaling bool, projectOverride string) (ReplayStats, error) {
@@ -156,7 +206,7 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 		if rec.Entity == nil {
 			return errors.New("record has no entity")
 		}
-		existing, err := s.GetEntityByNameAndType(rec.Entity.Name, rec.Entity.Type, rec.ProjectID)
+		existing, err := s.resolveRef(*rec.Entity, rec.ProjectID, stats)
 		if err != nil {
 			return err
 		}
@@ -174,7 +224,7 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 		if rec.Entity == nil {
 			return errors.New("record has no entity")
 		}
-		existing, err := s.GetEntityByNameAndType(rec.Entity.Name, rec.Entity.Type, rec.ProjectID)
+		existing, err := s.resolveRef(*rec.Entity, rec.ProjectID, stats)
 		if err != nil {
 			return err
 		}
@@ -214,7 +264,7 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 		if rec.Entity == nil {
 			return errors.New("record has no entity")
 		}
-		entity, err := s.GetEntityByNameAndType(rec.Entity.Name, rec.Entity.Type, rec.ProjectID)
+		entity, err := s.resolveRef(*rec.Entity, rec.ProjectID, stats)
 		if err != nil {
 			return err
 		}
@@ -279,6 +329,43 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 	}
 }
 
+// resolveRef finds the entity a record refers to, or nil when it is gone.
+//
+// The stable ID comes first. Indexer-derived IDs encode source position, so
+// they survive a rebuild exactly and pick the right symbol out of the many that
+// can share a name — which (name, type) cannot: kg's own graph has 55 colliding
+// pairs, one name appearing 21 times.
+//
+// Falling back to (name, type) keeps journals written before the hint existed
+// replayable, and covers entities whose file moved. When that fallback is
+// itself ambiguous the choice is recorded, because silently attaching a
+// hand-written note to an arbitrary same-named symbol is worse than saying so.
+func (s *Store) resolveRef(ref EntityRef, projectID string, stats *ReplayStats) (*Entity, error) {
+	if ref.ID != "" {
+		entity, err := s.GetEntity(ref.ID, projectID)
+		if err == nil && entity != nil {
+			return entity, nil
+		}
+		// Not an error: the symbol may have moved or gone, and the name
+		// fallback below is exactly what that case is for.
+	}
+
+	matches, err := s.FindEntitiesByNameAndType(ref.Name, ref.Type, projectID)
+	if err != nil {
+		return nil, err
+	}
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	default:
+		stats.Ambiguous++
+		stats.noteAmbiguity(ref, matches)
+		return matches[0], nil
+	}
+}
+
 // resolveEnds looks up both ends of a relation record. With create set, missing
 // endpoints are created so the edge survives; without it, a missing endpoint
 // yields nil and the caller skips (there is nothing to delete).
@@ -297,11 +384,11 @@ func (s *Store) resolveEnds(rec JournalRecord, stats *ReplayStats, create bool) 
 		}
 		return from, to, nil
 	}
-	from, err := s.GetEntityByNameAndType(rec.From.Name, rec.From.Type, rec.ProjectID)
+	from, err := s.resolveRef(*rec.From, rec.ProjectID, stats)
 	if err != nil {
 		return nil, nil, err
 	}
-	to, err := s.GetEntityByNameAndType(rec.To.Name, rec.To.Type, rec.ProjectID)
+	to, err := s.resolveRef(*rec.To, rec.ProjectID, stats)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -311,7 +398,7 @@ func (s *Store) resolveEnds(rec JournalRecord, stats *ReplayStats, create bool) 
 // resolveOrCreate finds the entity a record hangs off, creating a bare one if
 // the graph no longer holds it. See the "lossless" note at the top of the file.
 func (s *Store) resolveOrCreate(ref EntityRef, projectID string, stats *ReplayStats) (*Entity, error) {
-	existing, err := s.GetEntityByNameAndType(ref.Name, ref.Type, projectID)
+	existing, err := s.resolveRef(ref, projectID, stats)
 	if err != nil {
 		return nil, err
 	}

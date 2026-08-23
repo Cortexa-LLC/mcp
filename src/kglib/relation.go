@@ -42,8 +42,8 @@ func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
 	if err := s.appendJournal(JournalRecord{
 		Op:        OpCreateRelation,
 		ProjectID: projectID,
-		From:      &EntityRef{Name: from.Name, Type: from.Type},
-		To:        &EntityRef{Name: to.Name, Type: to.Type},
+		From:      entityRef(from),
+		To:        entityRef(to),
 		RelType:   relType,
 	}); err != nil {
 		return errJournalNote(err)
@@ -132,8 +132,8 @@ func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
 	if err := s.appendJournal(JournalRecord{
 		Op:        OpDeleteRelation,
 		ProjectID: projectID,
-		From:      &EntityRef{Name: from.Name, Type: from.Type},
-		To:        &EntityRef{Name: to.Name, Type: to.Type},
+		From:      entityRef(from),
+		To:        entityRef(to),
 		RelType:   relType,
 	}); err != nil {
 		return errJournalNote(err)
