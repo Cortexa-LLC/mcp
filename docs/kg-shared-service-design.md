@@ -43,8 +43,11 @@ Every graph today is a local Kuzu file. That has three consequences for a team:
 - **Shared writes.** Hub graphs are read-only to clients. Writes (`add_entity`,
   `add_observation`) keep landing in the local project graph. Team-shared observations
   reach the hub by being present in a scope's database at push time.
-- **Per-user access control.** One bearer token for reads (optional on a trusted
-  network), one for seeding. Finer ACLs can come later.
+- **Per-user access control in v1.** Shipped as one bearer token for reads (optional on
+  a trusted network) and one for seeding. This is a v1 expedient, not the destination —
+  a single shared secret cannot be revoked per person, cannot say who pushed what, and
+  has to be redistributed to every client to rotate. Per-user identity is the agreed
+  direction; see [Authentication](#authentication).
 - **Real-time sync.** The hub reflects the last seed, not the working tree.
 - **Snapshot download to clients.** Considered and rejected as the primary model — it
   turns the hub into blob storage, couples every client to the hub's Kuzu storage
@@ -153,9 +156,10 @@ existing federated monorepo round-trip cleanly.
 | `PUT /v1/graphs/{name}` | Seed: tar.zst of the `.db` dir + metadata `{repo, commit, kgVersion, layers}` |
 | `GET /healthz` | Liveness |
 
-**Auth:** two bearer tokens via env — `KG_HUB_READ_TOKEN` (optional; empty means open
-reads on a trusted network) and `KG_HUB_SEED_TOKEN` (required for PUT). TLS is a
-reverse proxy's or the tailnet's job, not kg's.
+**Auth (today):** two bearer tokens via env — `KG_HUB_READ_TOKEN` (optional; empty means
+open reads on a trusted network) and `KG_HUB_SEED_TOKEN` (required for PUT), compared
+constant-time in `hub.tokenMatches`. TLS is a reverse proxy's job, not kg's. See
+[Authentication](#authentication) for where this is going and why.
 
 **Version coupling:** only the seeder and the hub must run compatible kg/Kuzu versions
 (the hub opens the uploaded files); clients just speak HTTP. The seed request carries
@@ -280,9 +284,14 @@ single-node by design (Kuzu is embedded — no clustering to configure, and read
 opens handle concurrent queries). GitHub cannot host it — GitHub runs no long-lived
 services and offers only blob/artifact storage, which is the model this design rejects.
 
+**Decided for cortexa.com: a self-hosted Ubuntu Linux server in existing infra.** That
+is the established pattern there — Ubuntu LTS hosts are domain-joined via `realmd` +
+`sssd`, and the estate already self-hosts comparable services (Infisical, ReportPortal).
+The options below remain for anyone deploying kg elsewhere.
+
 | Option | Effort | Notes |
 |--------|--------|-------|
-| **Existing internal infra** (k8s, Nomad, a VM you already run) | — | StatefulSet/unit + persistent volume. If the team has this, use it. |
+| **Existing internal infra** (k8s, Nomad, a VM you already run) | — | StatefulSet/unit + persistent volume. If the team has this, use it. **This is the cortexa.com choice.** |
 | **Small VPS + Tailscale** (Hetzner ~€4/mo, DigitalOcean, Lightsail) | low | `scp` the binary, a systemd unit, disk is just there. Tailscale/tailnet ACLs double as network auth and TLS, so `KG_HUB_READ_TOKEN` can stay off. Recommended absent existing infra. |
 | **Fly.io + volume** | low | Container + `fly volumes create`; private access over WireGuard (Flycast) keeps it off the public internet. A few $/mo. |
 | **Railway / Render persistent disk** | low | Git-push deploy; public URL, so read token + TLS required. |
@@ -299,6 +308,89 @@ Notes that apply everywhere:
   `kg push` from CI. Backing up `registry.json` alone is enough to know what to
   re-seed; back up the full data dir only if re-indexing large repos is expensive
   enough to matter.
+
+## Authentication
+
+**Decision: per-user identity via OIDC, behind a pluggable verifier. Not yet built.**
+
+### Why the shared token has to go
+
+`KG_HUB_READ_TOKEN` is one secret held by everyone who can search. It cannot be revoked
+for one person, it makes the audit log say "someone", and rotating it means editing every
+client's scope config at once. A secret that everybody holds is not defence in depth; it
+is a single point of compromise with extra distribution steps. The same applies to
+`KG_HUB_SEED_TOKEN`, which additionally lives in CI.
+
+### OIDC as the mechanism
+
+Entra ID, Okta, Keycloak, Auth0 and Google are genuinely interchangeable over OIDC. The
+hub is configured with an **issuer URL**; it fetches that issuer's discovery document
+(`/.well-known/openid-configuration`), takes `jwks_uri` from it, validates the JWT
+signature against the published keys, and checks `iss`, `aud` and `exp`. `sub` becomes
+the identity for authorization and audit. Changing provider is configuration, not code.
+
+The transport already fits: the hub reads `Authorization: Bearer`, which is what OIDC
+access tokens use. Only the validation step and what falls out of it change.
+
+**GitHub is the exception, and it is one cortexa.com already uses** (ReportPortal
+authenticates against a GitHub OAuth app in the Cortexa-LLC org). GitHub's user sign-in
+is OAuth 2.0 without OIDC — no ID token, no discovery document, no JWKS. Identity comes
+from calling `GET /user` and `GET /user/orgs` with an opaque token. (GitHub's OIDC
+tokens exist only for Actions workload identity and identify a workflow, not a person.)
+A generic OIDC verifier therefore cannot reach it.
+
+### The plugin model
+
+Rather than pick one provider, the hub gets a small verifier interface — roughly
+`Verify(*http.Request) (Identity, error)`, where `Identity` carries at least a stable
+subject and optionally groups. Implementations:
+
+| Verifier | Covers |
+|----------|--------|
+| `oidc` | Entra ID, Okta, Keycloak, Auth0, Google — anything with a discovery document |
+| `github` | GitHub OAuth, with org or team membership as the access check |
+| `proxy` | A trusted identity-aware proxy (oauth2-proxy, Pomerium, Authelia) that has already authenticated the request and passes a verified header |
+| `token` | The current shared token, as a degenerate single identity — keeps existing deployments working and gives the interface a trivial reference implementation |
+
+This keeps GitHub reachable without a broker, and keeps the door open to one. An
+identity broker (Keycloak or Authentik with Entra, Okta and GitHub configured upstream)
+remains the option that scales furthest — the hub would speak `oidc` to the broker and
+nothing else, forever, and adding a provider becomes broker configuration rather than a
+kg release. The plugin model does not preclude that; it makes the broker one deployment
+choice rather than a prerequisite.
+
+The `proxy` verifier carries an obvious hazard: a trusted header is forgeable by anyone
+who can reach the port directly. A hub configured for it must bind loopback only, and
+should refuse to start bound to anything else.
+
+### CLI clients
+
+`kg search` has no browser redirect to catch a callback, so the interactive flow is the
+**OAuth 2.0 Device Authorization Grant** (RFC 8628) — the "open this URL, enter this
+code" pattern. Entra, Okta, Keycloak and Auth0 support it; GitHub has it as a toggle on
+OAuth apps. CI pushes are non-interactive and want client credentials or a workload
+identity instead, which is a separate grant against the same issuer.
+
+### Secrets
+
+`KG_HUB_READ_TOKEN` and `KG_HUB_SEED_TOKEN` are credentials, and cortexa.com's rule is
+that credentials live in Infisical (self-hosted at `infisical.cortexa.com`) while
+non-sensitive config does not. They are currently plain env vars, and the read token is
+additionally copied into every client's scope config. Moving them is worth doing
+independently of any OIDC work, and settles where CI gets the seed token for `kg push`.
+
+### Sequencing
+
+Authorization granularity — whether an authenticated user reads every graph or only
+some — is deliberately left open. It depends on what the hub ends up holding, and the
+registry already records which repo owns each graph, so per-graph rules can be added
+without a schema change. The `Identity` type should carry groups from the start so that
+decision stays cheap.
+
+Nothing here is built. The useful first step, whenever the hub becomes real, is to thread
+an `Identity` through the request path and audit-log it, with the shared token as the
+degenerate implementation. That makes real SSO an additive change rather than a
+rearchitecture, which is the only thing "SSO-ready" can honestly mean.
 
 ## Migrating existing databases
 
@@ -392,18 +484,30 @@ Three distinct migration concerns, with different answers:
    auto-rebuild/replay, `kg export`/`kg import` (JSONL round-trip; doubles as journal
    compaction and personal-store backup), `kg migrate`, and installer retention of the
    outgoing binary — see "Migrating existing databases".
-5. **Later:** incremental reseed; hub-side query embedding; `Source` field on
-   `SearchResult` for provenance display; per-graph tokens; offline read cache if a
-   team wants search on planes.
+5. **Later:** per-user authentication (OIDC behind a pluggable verifier — see
+   [Authentication](#authentication)); incremental reseed; hub-side query embedding;
+   `Source` field on `SearchResult` for provenance display; offline read cache if a team
+   wants search on planes.
+
+   "Per-graph tokens" used to sit on this list; it is superseded. More shared secrets is
+   the wrong shape for the problem, which is per-user authorization.
 
 ## Open questions
 
-- **Where does this team's hub actually live?** Existing infra vs. a new VPS/tailnet
-  decides whether read auth is a token or network membership.
+- ~~**Where does this team's hub actually live?**~~ **Answered:** a self-hosted Ubuntu
+  server in cortexa.com's own infra. Read auth is not settled by that, because the
+  answer turned out not to be "token or network" — see [Authentication](#authentication)
+  for the per-user direction that replaced the question.
 - **Scale expectations:** how many repos, how large, how many clients? Affects whether
-  the fan-out endpoint is Phase 2 or can wait for Phase 4.
+  the fan-out endpoint is worth building, and whether remote-layer search needs to stop
+  being sequential (currently one 3s timeout per layer, in series).
 - **Naming:** one hub per org makes graph names org-global; prefix with project
-  (`monorepo/platform`)?
+  (`monorepo/platform`)? Live if more than one repo pushes — Harvana and this repo are
+  both cortexa.com work, so a collision on a generic name like `platform` is plausible
+  rather than hypothetical.
+- **Deployment artifact:** systemd unit with a natively-built binary, or the Phase 2
+  container image? The native path needs the CGO/Kuzu binary built against the host's
+  glibc; the container sidesteps that. No systemd unit exists yet either way.
 
 ## See also
 
