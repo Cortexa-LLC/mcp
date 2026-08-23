@@ -24,6 +24,10 @@ import (
 // KeywordSearcher interface for search operations (implemented by both Store and FederatedStore)
 type KeywordSearcher interface {
 	KeywordSearch(projectID, query string, limit int) ([]*SearchResult, error)
+	// KeywordSearchFiltered applies the filter in the database. Filtering after
+	// the fact cannot work: the limit truncates first, so a public-only search
+	// returns whatever share of the top N happens to be public, often none.
+	KeywordSearchFiltered(projectID, query string, limit int, filter kglib.SearchFilter) ([]*SearchResult, error)
 	HybridSearch(projectID, query string, queryEmbedding []float32, config SearchConfig) ([]*SearchResult, error)
 }
 
@@ -39,21 +43,6 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 // are where the journaling decision is made — hand-write tools go through
 // withHandWrite, index_project deliberately does not — and that distinction is
 // invisible to any test that can only reach the server's stdio loop.
-// filterPublic drops unexported symbols. Entities with no visibility — files,
-// topics, hand-written knowledge — are kept: they have no API surface to be
-// outside of, and dropping them would make public_only mean something other
-// than what it says.
-func filterPublic(results []*SearchResult) []*SearchResult {
-	kept := make([]*SearchResult, 0, len(results))
-	for _, r := range results {
-		if r.Entity != nil && r.Entity.Visibility == kglib.VisibilityPrivate {
-			continue
-		}
-		kept = append(kept, r)
-	}
-	return kept
-}
-
 func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string, personal PersonalConfig) ([]mcp.Tool, map[string]mcp.ToolHandler) {
 	// jsonSchema is a helper to build a minimal JSON Schema object descriptor.
 	jsonSchema := func(props map[string]string, required ...string) map[string]interface{} {
@@ -200,14 +189,9 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 				if lim == 0 {
 					lim = 12
 				}
-				results, err := s.KeywordSearch(projectID, q, int(lim))
-				if err != nil {
-					return nil, err
-				}
-				if publicOnly, _ := req.Arguments["public_only"].(bool); publicOnly {
-					results = filterPublic(results)
-				}
-				return results, nil
+				publicOnly, _ := req.Arguments["public_only"].(bool)
+				return s.KeywordSearchFiltered(projectID, q, int(lim),
+					kglib.SearchFilter{PublicOnly: publicOnly})
 			})
 		},
 

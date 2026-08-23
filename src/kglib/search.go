@@ -10,6 +10,9 @@ import (
 
 // SearchConfig defines search behavior and ranking weights
 type SearchConfig struct {
+	// Filter narrows results in the database rather than afterwards.
+	Filter SearchFilter
+
 	KeywordWeight float64 // α — keyword match weight, default 0.4
 	RecencyWeight float64 // β — recency boost weight, default 0.1
 	Limit         int     // maximum results to return, default 20
@@ -22,6 +25,33 @@ func DefaultSearchConfig() SearchConfig {
 		RecencyWeight: 0.1,
 		Limit:         20,
 	}
+}
+
+// SearchFilter narrows what a search returns, in the database rather than after
+// the fact — see KeywordSearchFiltered for why that distinction matters.
+type SearchFilter struct {
+	// PublicOnly drops symbols whose visibility is private. Entities with no
+	// visibility — files, topics, hand-written knowledge — are kept: they have
+	// no API surface to be outside of.
+	PublicOnly bool
+}
+
+// defaultVisibilityPenalty is how far an unexported symbol sinks relative to an
+// exported one of the same relevance.
+//
+// It must exceed the largest recency contribution — RecencyWeight (0.1) times a
+// recency score of at most 1 — or a recently-touched unexported symbol
+// outranks an exported one of equal relevance and the demotion is not reliable.
+const defaultVisibilityPenalty = 0.15
+
+// visibilityPenalty returns a penalty that still dominates this config's
+// recency weight, so a caller raising RecencyWeight does not silently disable
+// the visibility ordering.
+func (c SearchConfig) visibilityPenalty() float64 {
+	if p := c.RecencyWeight * 1.5; p > defaultVisibilityPenalty {
+		return p
+	}
+	return defaultVisibilityPenalty
 }
 
 // SearchResult represents a single search result with score and metadata
@@ -37,6 +67,18 @@ type SearchResult struct {
 // The query is tokenized on whitespace; tokens are matched with OR logic so that
 // multi-word queries like "open closed ocp" find entities matching any term.
 func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResult, error) {
+	return s.KeywordSearchFiltered(projectID, query, limit, SearchFilter{})
+}
+
+// KeywordSearchFiltered is KeywordSearch with the filter applied in the
+// database rather than by the caller.
+//
+// Filtering afterwards is not equivalent, and the difference is not subtle:
+// LIMIT truncates before a caller-side filter can run, so asking for 20 public
+// results returns however many of the top 20 rows happen to be public — often
+// none. Indexing unexported symbols multiplied the candidate pool and made that
+// routine. The predicate has to be in the query.
+func (s *Store) KeywordSearchFiltered(projectID, query string, limit int, filter SearchFilter) ([]*SearchResult, error) {
 	if query == "" {
 		return nil, fmt.Errorf("query cannot be empty")
 	}
@@ -64,10 +106,17 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 	nameClause := strings.Join(nameConds, " OR ")
 	obsClause := strings.Join(obsConds, " OR ")
 
+	// Only when the column exists: a database written before it does not have
+	// the property, and Kuzu rejects the whole query for a missing one.
+	visibilityClause := ""
+	if filter.PublicOnly && s.hasVisibility {
+		visibilityClause = fmt.Sprintf("\n\t\t  AND (e.visibility IS NULL OR e.visibility <> '%s')", VisibilityPrivate)
+	}
+
 	// LIMIT takes an integer expression; using %d (not user input) is safe here.
 	cypherQuery := fmt.Sprintf(`
 		MATCH (e:Entity)
-		WHERE e.project_id = $project_id
+		WHERE e.project_id = $project_id`+visibilityClause+`
 		  AND (%s
 		       OR EXISTS {
 		         MATCH (e)-[:HAS_OBSERVATION]->(o:Observation)
@@ -128,7 +177,7 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 		})
 	}
 
-	rankResults(results)
+	rankResults(results, defaultVisibilityPenalty)
 
 	return results, nil
 }
@@ -317,7 +366,7 @@ func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit i
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
-	rankResults(results)
+	rankResults(results, defaultVisibilityPenalty)
 
 	return results, nil
 }
@@ -364,7 +413,7 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 
 	// Keyword search results
 	if query != "" {
-		keywordResults, err := s.KeywordSearch(projectID, query, config.Limit*2)
+		keywordResults, err := s.KeywordSearchFiltered(projectID, query, config.Limit*2, config.Filter)
 		if err != nil {
 			return nil, fmt.Errorf("keyword search: %w", err)
 		}
@@ -404,7 +453,7 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 	}
 
 	// Sort by score descending
-	rankResults(hybridResults)
+	rankResults(hybridResults, config.visibilityPenalty())
 
 	// Limit results
 	if len(hybridResults) > config.Limit {
@@ -414,31 +463,34 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 	return hybridResults, nil
 }
 
-// rankResults orders search results: relevance first, then visibility.
+// rankResults orders search results by effective relevance, which folds in a
+// penalty for unexported symbols.
 //
-// One comparator rather than a score sort followed by a visibility pass. A
-// second pass keyed only on visibility does not break ties — it overrides the
-// score entirely, sinking a strong unexported match below a weak exported one.
+// This was a tie-break on exactly equal scores, and that never fired. The
+// hybrid path adds config.RecencyWeight*recencyScore to every score, so two
+// results are essentially never bit-identical float64s and the visibility term
+// was dead code — while two documented places promised the behaviour.
 //
-// The visibility term is a tie-break rather than a filter: filtering to
-// exported-only would hide an entire `package main` command layer, where
-// nothing can be exported because nothing can import it, which is the case that
-// motivated recording visibility at all.
+// A penalty subtracted from the score composes instead of competing: it is
+// applied once, at comparison time rather than by mutating Score, so it cannot
+// be double-counted by a caller that ranks twice. It must exceed the largest
+// recency contribution, or recency noise reorders across it — hence the
+// relationship asserted in defaultVisibilityPenalty's comment.
 //
-// Only VisibilityPrivate is demoted. Empty visibility ranks alongside public
-// rather than between the two: it covers files, markdown topics and
-// hand-written knowledge, and hand-written knowledge is the last thing that
-// should sink below an exported getter.
-//
-// Stable, so orderings the caller established and this does not speak to —
-// recency for keyword search, where every score is 1.0 — survive intact.
-func rankResults(results []*SearchResult) {
+// Only VisibilityPrivate is penalised. Empty visibility ranks with public: it
+// covers files, markdown topics and hand-written knowledge, and hand-written
+// knowledge is the last thing that should sink below an exported getter.
+func rankResults(results []*SearchResult, penalty float64) {
 	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
-		}
-		return visibilityRank(results[i]) < visibilityRank(results[j])
+		return effectiveScore(results[i], penalty) > effectiveScore(results[j], penalty)
 	})
+}
+
+func effectiveScore(r *SearchResult, penalty float64) float64 {
+	if visibilityRank(r) == 1 {
+		return r.Score - penalty
+	}
+	return r.Score
 }
 
 func visibilityRank(r *SearchResult) int {
