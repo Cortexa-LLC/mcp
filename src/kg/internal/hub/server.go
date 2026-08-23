@@ -1,10 +1,12 @@
 package hub
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -34,21 +36,36 @@ func validPathComponent(name string) bool {
 // Server hosts read-only knowledge graphs under dataDir and answers search
 // queries over HTTP.
 type Server struct {
-	dataDir   string
-	readToken string // "" = open reads
-	seedToken string // "" = seeding disabled
-	kgVersion string
-	mu        sync.Mutex // guards registry + seed operations
+	dataDir      string
+	readVerifier Verifier // nil = open reads
+	seedVerifier Verifier // nil = seeding disabled
+	kgVersion    string
+	mu           sync.Mutex // guards registry + seed operations
 }
 
-// NewServer creates a hub server rooted at dataDir. An empty readToken leaves
-// reads unauthenticated; an empty seedToken disables seeding entirely.
+// NewServer creates a hub server rooted at dataDir with shared-token auth.
+// An empty readToken leaves reads unauthenticated; an empty seedToken
+// disables seeding entirely.
 func NewServer(dataDir, readToken, seedToken, kgVersion string) *Server {
+	var read, seed Verifier
+	if readToken != "" {
+		read = NewTokenVerifier(readToken)
+	}
+	if seedToken != "" {
+		seed = NewTokenVerifier(seedToken)
+	}
+	return NewServerWithAuth(dataDir, read, seed, kgVersion)
+}
+
+// NewServerWithAuth creates a hub server whose read and seed surfaces are
+// guarded by the given verifiers. A nil readVerifier leaves reads
+// unauthenticated; a nil seedVerifier disables seeding entirely.
+func NewServerWithAuth(dataDir string, readVerifier, seedVerifier Verifier, kgVersion string) *Server {
 	s := &Server{
-		dataDir:   dataDir,
-		readToken: readToken,
-		seedToken: seedToken,
-		kgVersion: kgVersion,
+		dataDir:      dataDir,
+		readVerifier: readVerifier,
+		seedVerifier: seedVerifier,
+		kgVersion:    kgVersion,
 	}
 	s.sweepStaging()
 	return s
@@ -81,11 +98,11 @@ func (s *Server) sweepStaging() {
 	}
 }
 
-// ReadAuthEnabled reports whether read requests require a bearer token.
-func (s *Server) ReadAuthEnabled() bool { return s.readToken != "" }
+// ReadAuthEnabled reports whether read requests require authentication.
+func (s *Server) ReadAuthEnabled() bool { return s.readVerifier != nil }
 
 // SeedingEnabled reports whether the hub accepts pushes.
-func (s *Server) SeedingEnabled() bool { return s.seedToken != "" }
+func (s *Server) SeedingEnabled() bool { return s.seedVerifier != nil }
 
 // Handler returns the hub's HTTP handler.
 func (s *Server) Handler() http.Handler {
@@ -116,10 +133,43 @@ func tokenMatches(token, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
 }
 
+// identityKey stores the verified *Identity in the request context so
+// handlers can name the caller in audit lines.
+type ctxKey int
+
+const identityKey ctxKey = 0
+
+// identityFrom returns the request's verified identity, or nil on an
+// unauthenticated (open-read) request.
+func identityFrom(r *http.Request) *Identity {
+	id, _ := r.Context().Value(identityKey).(*Identity)
+	return id
+}
+
+// verify runs v against r and writes the appropriate error response on
+// failure: 403 for ErrForbidden (authenticated but not allowed), 401
+// otherwise. On success it returns the request with the identity attached.
+func verify(v Verifier, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	id, err := v.Verify(r)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if errors.Is(err, ErrForbidden) {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err.Error())
+		return nil, false
+	}
+	return r.WithContext(context.WithValue(r.Context(), identityKey, id)), true
+}
+
 func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.readToken != "" && !tokenMatches(bearerToken(r), s.readToken) {
-			writeError(w, http.StatusUnauthorized, "missing or invalid read token")
+		if s.readVerifier == nil {
+			next(w, r)
+			return
+		}
+		r, ok := verify(s.readVerifier, w, r)
+		if !ok {
 			return
 		}
 		next(w, r)
@@ -128,12 +178,12 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) seedAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.seedToken == "" {
-			writeError(w, http.StatusForbidden, "seeding disabled: KG_HUB_SEED_TOKEN not set on the hub")
+		if s.seedVerifier == nil {
+			writeError(w, http.StatusForbidden, "seeding disabled: no seed auth configured on the hub (KG_HUB_SEED_TOKEN or KG_HUB_SEED_AUTH)")
 			return
 		}
-		if !tokenMatches(bearerToken(r), s.seedToken) {
-			writeError(w, http.StatusUnauthorized, "missing or invalid seed token")
+		r, ok := verify(s.seedVerifier, w, r)
+		if !ok {
 			return
 		}
 		next(w, r)
@@ -559,6 +609,7 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "seeding failed")
 		return
 	}
+	log.Printf("seed %s@%s accepted from %s", name, commit, identityFrom(r))
 	writeJSON(w, http.StatusOK, map[string]string{
 		"graph":   name,
 		"commit":  commit,

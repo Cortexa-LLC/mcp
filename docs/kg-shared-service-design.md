@@ -311,7 +311,13 @@ Notes that apply everywhere:
 
 ## Authentication
 
-**Decision: per-user identity via OIDC, behind a pluggable verifier. Not yet built.**
+**Decision: per-user identity via OIDC, behind a pluggable verifier. Partially built:
+the verifier interface and the `oidc` and `token` verifiers are implemented
+(`internal/hub/auth.go`, `oidc.go`); `github` and `proxy` remain.** Scheme selection is
+per surface (`KG_HUB_READ_AUTH` / `KG_HUB_SEED_AUTH`, default `token`), so OIDC reads
+can roll out while CI keeps the seed token. In oidc mode, seeding is restricted to
+`KG_HUB_SEED_SUBJECTS` (subjects or emails) when set, and every accepted seed logs the
+pusher's identity.
 
 ### Why the shared token has to go
 
@@ -345,12 +351,12 @@ Rather than pick one provider, the hub gets a small verifier interface — rough
 `Verify(*http.Request) (Identity, error)`, where `Identity` carries at least a stable
 subject and optionally groups. Implementations:
 
-| Verifier | Covers |
-|----------|--------|
-| `oidc` | Entra ID, Okta, Keycloak, Auth0, Google — anything with a discovery document |
-| `github` | GitHub OAuth, with org or team membership as the access check |
-| `proxy` | A trusted identity-aware proxy (oauth2-proxy, Pomerium, Authelia) that has already authenticated the request and passes a verified header |
-| `token` | The current shared token, as a degenerate single identity — keeps existing deployments working and gives the interface a trivial reference implementation |
+| Verifier | Covers | Status |
+|----------|--------|--------|
+| `oidc` | Entra ID, Okta, Keycloak, Auth0, Google — anything with a discovery document | built |
+| `github` | GitHub OAuth, with org or team membership as the access check | pending |
+| `proxy` | A trusted identity-aware proxy (oauth2-proxy, Pomerium, Authelia) that has already authenticated the request and passes a verified header | pending |
+| `token` | The current shared token, as a degenerate single identity — keeps existing deployments working and gives the interface a trivial reference implementation | built |
 
 This keeps GitHub reachable without a broker, and keeps the door open to one. An
 identity broker (Keycloak or Authentik with Entra, Okta and GitHub configured upstream)
@@ -496,7 +502,8 @@ Three distinct migration concerns, with different answers:
    compaction and personal-store backup), `kg migrate`, and installer retention of the
    outgoing binary — see "Migrating existing databases".
 5. **Later:** per-user authentication (OIDC behind a pluggable verifier — see
-   [Authentication](#authentication)); incremental reseed; hub-side query embedding;
+   [Authentication](#authentication); interface plus `oidc`/`token` verifiers are
+   built, `github`/`proxy` remain); incremental reseed; hub-side query embedding;
    `Source` field on `SearchResult` for provenance display; offline read cache if a team
    wants search on planes.
 

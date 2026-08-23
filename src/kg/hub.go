@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/cortexa-llc/mcp/kg/internal/hub"
@@ -30,9 +32,22 @@ var hubServeCmd = &cobra.Command{
 	Long: `Serve read-only knowledge graphs over HTTP.
 
 Graphs are seeded with 'kg push' and stored under the data directory.
-Tokens come from the environment:
+Authentication comes from the environment, selected per surface:
+  KG_HUB_READ_AUTH    "token" (default) or "oidc"
+  KG_HUB_SEED_AUTH    "token" (default) or "oidc"
+
+token mode (shared secrets, the original scheme):
   KG_HUB_READ_TOKEN   bearer token required for reads (unset = open reads)
-  KG_HUB_SEED_TOKEN   bearer token required for 'kg push' (unset = seeding disabled)`,
+  KG_HUB_SEED_TOKEN   bearer token required for 'kg push' (unset = seeding disabled)
+
+oidc mode (per-user identity; clients send an access token from the issuer):
+  KG_HUB_OIDC_ISSUER    issuer URL; its discovery document supplies the JWKS
+  KG_HUB_OIDC_AUDIENCE  required "aud" claim
+  KG_HUB_SEED_SUBJECTS  comma-separated subjects/emails allowed to push
+                        (unset = any authenticated identity may push)
+
+Mixing modes is expected during migration: KG_HUB_READ_AUTH=oidc with seeding
+left on the CI seed token is a valid configuration.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dataDir := hubServeData
 		if dataDir == "" {
@@ -49,19 +64,72 @@ Tokens come from the environment:
 			return fmt.Errorf("create data directory: %w", err)
 		}
 
-		srv := hub.NewServer(dataDir, os.Getenv("KG_HUB_READ_TOKEN"), os.Getenv("KG_HUB_SEED_TOKEN"), Version)
-		readAuth := "open"
-		if srv.ReadAuthEnabled() {
-			readAuth = "token required"
+		readVerifier, readDesc, err := hubVerifier("read")
+		if err != nil {
+			return err
 		}
-		seeding := "disabled"
-		if srv.SeedingEnabled() {
-			seeding = "enabled"
+		seedVerifier, seedDesc, err := hubVerifier("seed")
+		if err != nil {
+			return err
 		}
+
+		srv := hub.NewServerWithAuth(dataDir, readVerifier, seedVerifier, Version)
 		fmt.Fprintf(os.Stderr, "kg hub listening on %s (data: %s, reads: %s, seeding: %s)\n",
-			hubServeListen, dataDir, readAuth, seeding)
+			hubServeListen, dataDir, readDesc, seedDesc)
 		return http.ListenAndServe(hubServeListen, srv.Handler())
 	},
+}
+
+// oidcVerifierOnce builds the OIDC verifier at most once even when both
+// surfaces use it: one discovery fetch, one shared JWKS cache.
+var oidcVerifierOnce = sync.OnceValues(func() (*hub.OIDCVerifier, error) {
+	return hub.NewOIDCVerifier(context.Background(),
+		os.Getenv("KG_HUB_OIDC_ISSUER"), os.Getenv("KG_HUB_OIDC_AUDIENCE"))
+})
+
+// hubVerifier resolves the verifier for one auth surface ("read" or "seed")
+// from the environment. A nil verifier with nil error means the surface's
+// token-mode default: open reads, or seeding disabled.
+func hubVerifier(surface string) (hub.Verifier, string, error) {
+	envMode, envToken := "KG_HUB_READ_AUTH", "KG_HUB_READ_TOKEN"
+	if surface == "seed" {
+		envMode, envToken = "KG_HUB_SEED_AUTH", "KG_HUB_SEED_TOKEN"
+	}
+	switch mode := os.Getenv(envMode); mode {
+	case "", "token":
+		token := os.Getenv(envToken)
+		if token == "" {
+			if surface == "read" {
+				return nil, "open", nil
+			}
+			return nil, "disabled", nil
+		}
+		return hub.NewTokenVerifier(token), "token required", nil
+	case "oidc":
+		v, err := oidcVerifierOnce()
+		if err != nil {
+			return nil, "", err
+		}
+		desc := fmt.Sprintf("oidc (%s)", v.Issuer())
+		if surface == "seed" {
+			if subjects := splitCommaList(os.Getenv("KG_HUB_SEED_SUBJECTS")); len(subjects) > 0 {
+				return hub.RequireSubjects(v, subjects), fmt.Sprintf("%s, %d allowed subject(s)", desc, len(subjects)), nil
+			}
+		}
+		return v, desc, nil
+	default:
+		return nil, "", fmt.Errorf("%s: unknown auth mode %q (want token or oidc)", envMode, mode)
+	}
+}
+
+func splitCommaList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 var hubListHubURL string

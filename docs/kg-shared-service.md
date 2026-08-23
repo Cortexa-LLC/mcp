@@ -22,15 +22,24 @@ kg hub serve --listen 127.0.0.1:8080 --data /srv/kg    # explicit address and st
 |-----------------|--------|
 | `--listen` | Listen address (default `:7411`) |
 | `--data` | Data directory (default `$KG_HUB_HOME`, else `~/.kg-hub`) |
-| `KG_HUB_READ_TOKEN` | Bearer token required for reads; unset = open reads |
-| `KG_HUB_SEED_TOKEN` | Bearer token required for `kg push`; unset = seeding disabled |
+| `KG_HUB_READ_AUTH` | Auth scheme for reads: `token` (default) or `oidc` |
+| `KG_HUB_SEED_AUTH` | Auth scheme for `kg push`: `token` (default) or `oidc` |
+| `KG_HUB_READ_TOKEN` | token mode: bearer token required for reads; unset = open reads |
+| `KG_HUB_SEED_TOKEN` | token mode: bearer token required for `kg push`; unset = seeding disabled |
+| `KG_HUB_OIDC_ISSUER` | oidc mode: issuer URL; its discovery document supplies the signing keys |
+| `KG_HUB_OIDC_AUDIENCE` | oidc mode: required `aud` claim |
+| `KG_HUB_SEED_SUBJECTS` | oidc seeding: comma-separated subjects/emails allowed to push; unset = any authenticated identity |
 
-Both are shared secrets, which is a v1 expedient rather than the intended end state: one
-token held by everyone cannot be revoked per person and cannot tell you who pushed what.
-Per-user identity over OIDC is the agreed direction — see
-[the design doc's Authentication section](kg-shared-service-design.md#authentication).
-Treat these as credentials in the meantime and store them accordingly rather than
-pasting them into shell history or committed config.
+The tokens are shared secrets, a v1 expedient: one token held by everyone cannot be
+revoked per person and cannot tell you who pushed what. Per-user identity over OIDC is
+the agreed direction — see
+[the design doc's Authentication section](kg-shared-service-design.md#authentication) —
+and the hub now supports it: set `KG_HUB_READ_AUTH=oidc` with the issuer and audience
+variables, and readers authenticate with an access token from your IdP instead of a
+shared secret; the pusher's identity is named in the hub's log. The schemes mix per
+surface, so the expected migration is OIDC reads first while CI keeps pushing with the
+seed token. Treat any token as a credential and store it accordingly rather than
+pasting it into shell history or committed config.
 
 Or in a container (build from the repo's `src/` directory):
 
