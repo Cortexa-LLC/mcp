@@ -1,6 +1,7 @@
 package kglib
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -93,7 +94,7 @@ func TestRankByVisibilityDemotesPrivateWithoutDropping(t *testing.T) {
 		{Entity: &Entity{Name: "ExportedFunc", Visibility: VisibilityPublic}, Score: 1.0},
 		{Entity: &Entity{Name: "a-hand-written-note", Visibility: ""}, Score: 1.0},
 	}
-	rankResults(results)
+	rankResults(results, defaultVisibilityPenalty)
 
 	if len(results) != 3 {
 		t.Fatalf("ranking dropped results: %d left", len(results))
@@ -115,7 +116,7 @@ func TestVisibilityOnlyBreaksTies(t *testing.T) {
 		{Entity: &Entity{Name: "ExportedButWeak", Visibility: VisibilityPublic}, Score: 0.2},
 		{Entity: &Entity{Name: "unexportedButStrong", Visibility: VisibilityPrivate}, Score: 0.9},
 	}
-	rankResults(results)
+	rankResults(results, defaultVisibilityPenalty)
 
 	if results[0].Entity.Name != "unexportedButStrong" {
 		t.Errorf("visibility overrode relevance: got %s first, want the higher-scoring match",
@@ -215,4 +216,98 @@ func TestWriteOpenAddsVisibilityColumn(t *testing.T) {
 	if !migrated.hasVisibility {
 		t.Error("a write-mode open did not migrate the visibility column back")
 	}
+}
+
+// The audit's reproduction: with many unexported symbols matching a query, a
+// caller-side filter runs after LIMIT has already truncated, so asking for
+// public results returns few or none while exported matches sit below the cut.
+func TestPublicOnlyFiltersBeforeTheLimit(t *testing.T) {
+	store := setupTestStore(t)
+	defer store.Close()
+
+	// 60 unexported matches, all more recently updated than the exported one,
+	// so ORDER BY updated_at DESC puts them first.
+	exported, err := store.CreateEntity("ExportedHandler", "function", "p")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := setVisibility(store, exported.ID, VisibilityPublic); err != nil {
+		t.Fatalf("setVisibility: %v", err)
+	}
+	for i := 0; i < 60; i++ {
+		e, err := store.CreateEntity(fmt.Sprintf("zzzhandler%02d", i), "function", "p")
+		if err != nil {
+			t.Fatalf("CreateEntity: %v", err)
+		}
+		if err := setVisibility(store, e.ID, VisibilityPrivate); err != nil {
+			t.Fatalf("setVisibility: %v", err)
+		}
+	}
+
+	// Unfiltered, the exported one is crowded out of a small window.
+	results, err := store.KeywordSearchFiltered("p", "handler", 20, SearchFilter{PublicOnly: true})
+	if err != nil {
+		t.Fatalf("KeywordSearchFiltered: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("--public-only returned nothing while an exported match exists in the graph")
+	}
+	for _, r := range results {
+		if r.Entity.Visibility == VisibilityPrivate {
+			t.Errorf("public-only search returned unexported %s", r.Entity.Name)
+		}
+	}
+
+	var found bool
+	for _, r := range results {
+		if r.Entity.Name == "ExportedHandler" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the exported match is missing from %d results", len(results))
+	}
+}
+
+// Recency noise made every score distinct, so the old equality-gated tie-break
+// never fired and the documented demotion was a no-op on the default path.
+func TestVisibilityDemotionSurvivesRecencyNoise(t *testing.T) {
+	results := []*SearchResult{
+		// A private entry with a small recency advantage, as HybridSearch produces.
+		{Entity: &Entity{Name: "unexportedRecent", Visibility: VisibilityPrivate}, Score: 1.0 + 0.1*0.95},
+		{Entity: &Entity{Name: "ExportedOlder", Visibility: VisibilityPublic}, Score: 1.0 + 0.1*0.10},
+	}
+	cfg := DefaultSearchConfig()
+	rankResults(results, cfg.visibilityPenalty())
+
+	if results[0].Entity.Name != "ExportedOlder" {
+		t.Errorf("order = %s first; a recency boost let an unexported symbol outrank "+
+			"an exported one of equal base relevance", results[0].Entity.Name)
+	}
+}
+
+// Relevance still dominates: a clearly better unexported match beats a weak
+// exported one. The penalty demotes, it does not exclude.
+func TestVisibilityPenaltyDoesNotOverrideRelevance(t *testing.T) {
+	results := []*SearchResult{
+		{Entity: &Entity{Name: "ExportedWeak", Visibility: VisibilityPublic}, Score: 0.2},
+		{Entity: &Entity{Name: "unexportedStrong", Visibility: VisibilityPrivate}, Score: 0.9},
+	}
+	rankResults(results, DefaultSearchConfig().visibilityPenalty())
+
+	if results[0].Entity.Name != "unexportedStrong" {
+		t.Errorf("the penalty overrode relevance: got %s first", results[0].Entity.Name)
+	}
+}
+
+// setVisibility writes the column directly, the way the indexer's bulk path does.
+func setVisibility(store *Store, id, visibility string) error {
+	result, err := store.QueryParams(
+		`MATCH (e:Entity) WHERE e.id = $id SET e.visibility = $v`,
+		map[string]any{"id": id, "v": visibility})
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
 }

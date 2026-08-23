@@ -50,7 +50,7 @@ exported ones. Use --public-only to see just a package's API surface.`,
 			}
 			defer store.Close()
 
-			results, err := store.HybridSearch(projectID, args[0], nil, knowledge.DefaultSearchConfig())
+			results, err := store.HybridSearch(projectID, args[0], nil, searchConfig())
 			if err != nil {
 				return err
 			}
@@ -133,7 +133,7 @@ func searchScope(aiDir, projectID, scopeName, query string) error {
 		}
 		defer store.Close()
 
-		results, err := store.HybridSearch(projectID, query, nil, knowledge.DefaultSearchConfig())
+		results, err := store.HybridSearch(projectID, query, nil, searchConfig())
 		if err != nil {
 			return err
 		}
@@ -147,7 +147,7 @@ func searchScope(aiDir, projectID, scopeName, query string) error {
 	}
 	defer fs.Close()
 
-	results, err := fs.HybridSearch(projectID, query, nil, knowledge.DefaultSearchConfig())
+	results, err := fs.HybridSearch(projectID, query, nil, searchConfig())
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func searchAllScopes(aiDir, projectID, query string) error {
 			continue
 		}
 
-		results, err := store.HybridSearch(projectID, query, nil, knowledge.DefaultSearchConfig())
+		results, err := store.HybridSearch(projectID, query, nil, searchConfig())
 		store.Close()
 
 		if err != nil {
@@ -205,11 +205,18 @@ func searchAllScopes(aiDir, projectID, query string) error {
 	return nil
 }
 
+// searchConfig builds the config for this invocation. --public-only becomes a
+// database predicate rather than a print-time skip: the limit truncates before
+// any print-time filter runs, so filtering there returns whatever share of the
+// top N happens to be public — routinely none.
+func searchConfig() knowledge.SearchConfig {
+	cfg := knowledge.DefaultSearchConfig()
+	cfg.Filter.PublicOnly = searchPublicOnly
+	return cfg
+}
+
 func printResults(results []*knowledge.SearchResult) {
 	for _, res := range results {
-		if searchPublicOnly && res.Entity.Visibility == kglib.VisibilityPrivate {
-			continue
-		}
 		fmt.Printf("%s\t%s\t%s%s\n", res.Entity.ID, res.Entity.Type, res.Entity.Name,
 			visibilitySuffix(res.Entity.Visibility))
 	}

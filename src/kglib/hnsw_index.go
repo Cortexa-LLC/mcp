@@ -72,7 +72,7 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id AND e.embedding IS NOT NULL
-		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at, e.embedding
+		RETURN `+s.entityColumns()+`, e.embedding
 	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return nil, fmt.Errorf("query entities for index build: %w", err)
@@ -98,17 +98,15 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		}
 		tuple.Close()
 
-		entity := &Entity{
-			ID:        row[0].(string),
-			Name:      row[1].(string),
-			Type:      row[2].(string),
-			ProjectID: row[3].(string),
-		}
+		// Shares entityColumns/entityFromRow with every other entity
+		// projection. This query was the one the centralisation missed, so
+		// entities reached through the vector path carried no visibility and
+		// slipped past --public-only while their keyword-found twins did not.
+		entity := entityFromRow(row)
 
-		entity.CreatedAt = timeOrZero(row[4])
-		entity.UpdatedAt = timeOrZero(row[5])
-
-		rawEmb, ok := row[6].([]any)
+		// The embedding is appended after entityColumns, whose width varies with
+		// what the database actually has — so index from the end, not by number.
+		rawEmb, ok := row[len(row)-1].([]any)
 		if !ok || len(rawEmb) == 0 {
 			continue
 		}
