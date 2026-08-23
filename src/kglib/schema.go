@@ -48,7 +48,8 @@ func (s *Store) initSchema(cfg *SchemaConfig) error {
 			project_id STRING,
 			created_at TIMESTAMP,
 			updated_at TIMESTAMP,
-			embedding FLOAT[1536]
+			embedding FLOAT[1536],
+			visibility STRING
 		)`,
 
 		// Observation node table
@@ -107,6 +108,11 @@ func (s *Store) migrateEmbeddings() error {
 	migrations := []string{
 		`ALTER TABLE Entity ADD embedding FLOAT[1536]`,
 		`ALTER TABLE Observation ADD embedding FLOAT[1536]`,
+		// Source-language visibility (see Entity.Visibility). Empty on rows
+		// written before this column existed, and on entities that have no
+		// such concept — read paths must treat empty as "unknown", never as
+		// "private", or a not-yet-reindexed graph looks entirely private.
+		`ALTER TABLE Entity ADD visibility STRING`,
 	}
 
 	for _, stmt := range migrations {

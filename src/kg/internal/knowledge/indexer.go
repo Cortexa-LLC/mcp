@@ -58,6 +58,10 @@ type entityRecord struct {
 	ProjectID string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// Visibility is set only for code symbols that have one; see
+	// kglib.Entity.Visibility. Empty everywhere else, and empty is "unknown",
+	// not "private".
+	Visibility string
 }
 
 // relationRecord holds relation data before batch insert
@@ -347,17 +351,26 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 // writeEntity appends an entity to the slice if not already seen.
 // ts is the timestamp to use for both created_at and updated_at.
 func writeEntity(entities *[]entityRecord, seen map[string]bool, id, name, typ, projectID string, ts time.Time) bool {
+	return writeEntityVis(entities, seen, id, name, typ, projectID, ts, "")
+}
+
+// writeEntityVis is writeEntity for symbols that carry a source-language
+// visibility. Kept separate so the thirty-odd callers that index files,
+// markdown headings, Makefile targets and GraphQL types — none of which have a
+// visibility concept — do not have to pass an empty string to say so.
+func writeEntityVis(entities *[]entityRecord, seen map[string]bool, id, name, typ, projectID string, ts time.Time, visibility string) bool {
 	if seen[id] {
 		return false
 	}
 	seen[id] = true
 	*entities = append(*entities, entityRecord{
-		ID:        id,
-		Name:      name,
-		Type:      typ,
-		ProjectID: projectID,
-		CreatedAt: ts,
-		UpdatedAt: ts,
+		ID:         id,
+		Name:       name,
+		Type:       typ,
+		ProjectID:  projectID,
+		CreatedAt:  ts,
+		UpdatedAt:  ts,
+		Visibility: visibility,
 	})
 	return true
 }
@@ -396,6 +409,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 			"project_id": ent.ProjectID,
 			"created_at": ent.CreatedAt.UTC().Format(time.RFC3339),
 			"updated_at": ent.UpdatedAt.UTC().Format(time.RFC3339),
+			"visibility": ent.Visibility,
 		}
 		if err := enc.Encode(row); err != nil {
 			f.Close()
@@ -406,7 +420,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 
 	// Bulk load via COPY FROM JSON
 	query := fmt.Sprintf(
-		`COPY Entity(id, name, type, project_id, created_at, updated_at) FROM '%s'`,
+		`COPY Entity(id, name, type, project_id, created_at, updated_at, visibility) FROM '%s'`,
 		ndjsonPath,
 	)
 	result, err := idx.store.Query(query)
@@ -426,7 +440,8 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 				type: $type,
 				project_id: $project_id,
 				created_at: $created_at,
-				updated_at: $updated_at
+				updated_at: $updated_at,
+				visibility: $visibility
 			})
 		`, map[string]any{
 			"id":         ent.ID,
@@ -435,6 +450,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 			"project_id": ent.ProjectID,
 			"created_at": ent.CreatedAt,
 			"updated_at": ent.UpdatedAt,
+			"visibility": ent.Visibility,
 		})
 		if err != nil {
 			fmt.Printf("Warning: insert entity %s: %v\n", ent.ID, err)

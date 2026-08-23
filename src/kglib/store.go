@@ -32,6 +32,7 @@ type Store struct {
 	hnswIdx         *vectorIndexCache // per-project lazy HNSW index
 	allowedRelTypes []string          // configured relation types for validation
 	journal         *Journal          // hand-write journal; nil unless EnableJournal was called
+	hasVisibility   bool              // Entity.visibility exists in this database (see entityColumns)
 }
 
 // OpenStore opens or creates a Kuzu database in read-write mode with the given schema configuration.
@@ -112,6 +113,12 @@ func openStoreWithConfig(dbPath string, readOnly bool, cfg *SchemaConfig) (*Stor
 		// falls back to the unstamped path on a later version check.
 		_ = WriteFormatStamp(dbPath, buildVersion)
 	}
+
+	// Which optional columns this database actually has. After initSchema on a
+	// write open, so a freshly-migrated database is detected correctly; and on
+	// read-only opens too, which never migrate and so may be reading a graph
+	// written before a column existed.
+	store.detectColumns()
 
 	return store, nil
 }

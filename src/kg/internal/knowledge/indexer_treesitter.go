@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/cortexa-llc/mcp/kglib"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/bash"
 	"github.com/smacker/go-tree-sitter/c"
@@ -53,9 +54,29 @@ type langConfig struct {
 	// extractImportPath extracts the import path string(s) from an import node.
 	// May be nil if the language has no imports.
 	extractImportPath func(node *sitter.Node, src []byte) []string
-	// isPublic filters symbols to only those considered public/exported.
-	// If nil, all named symbols are included.
+	// isPublic reports whether a symbol is public/exported in this language.
+	//
+	// It classifies; it does not filter. Unexported symbols are indexed too and
+	// carry kglib.VisibilityPrivate, because "exported" is a statement about a
+	// package's API surface, not about whether a symbol is worth finding — and
+	// in a `package main` command layer nothing can be exported at all, which
+	// made the entire CLI invisible to search when this filtered.
+	//
+	// If nil, symbols are indexed with no visibility recorded, which is correct
+	// for languages where the concept does not apply.
 	isPublic func(name string) bool
+}
+
+// symbolVisibility classifies a symbol for the visibility column, returning ""
+// for languages that have no such concept.
+func symbolVisibility(cfg langConfig, name string) string {
+	if cfg.isPublic == nil {
+		return ""
+	}
+	if cfg.isPublic(name) {
+		return kglib.VisibilityPublic
+	}
+	return kglib.VisibilityPrivate
 }
 
 // langRegistry maps lowercase file extensions (with leading dot) to langConfig.
@@ -523,11 +544,8 @@ func (idx *Indexer) walkNode(
 		if name == "" {
 			break
 		}
-		if cfg.isPublic != nil && !cfg.isPublic(name) {
-			break
-		}
 		funcID := fmt.Sprintf("function:%s:%s", relPath, name)
-		if writeEntity(entities, seenEntities, funcID, name, EntityTypeFunction, idx.projectID, now) {
+		if writeEntityVis(entities, seenEntities, funcID, name, EntityTypeFunction, idx.projectID, now, symbolVisibility(cfg, name)) {
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: funcID, Type: RelContains})
@@ -545,11 +563,8 @@ func (idx *Indexer) walkNode(
 		if name == "" {
 			break
 		}
-		if cfg.isPublic != nil && !cfg.isPublic(name) {
-			break
-		}
 		typeID := fmt.Sprintf("type:%s:%s", relPath, name)
-		if writeEntity(entities, seenEntities, typeID, name, EntityTypeType, idx.projectID, now) {
+		if writeEntityVis(entities, seenEntities, typeID, name, EntityTypeType, idx.projectID, now, symbolVisibility(cfg, name)) {
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: typeID, Type: RelContains})

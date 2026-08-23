@@ -11,7 +11,26 @@ type Entity struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	Observations []string  `json:"observations,omitempty"`
+
+	// Visibility is the symbol's source-language visibility: VisibilityPublic
+	// or VisibilityPrivate for code symbols, empty for everything else.
+	//
+	// Empty means "not applicable or not known", and covers three cases that
+	// must not be confused with private: hand-written entities, which have no
+	// source-language visibility at all; entity kinds that have none (files,
+	// markdown topics, Makefile targets); and rows written before the column
+	// existed, which fill in on the next index.
+	Visibility string `json:"visibility,omitempty"`
 }
+
+// Symbol visibility values. Deliberately a small open vocabulary rather than a
+// bool: Go and Python collapse to two, but Java has protected and
+// package-private and Kotlin has internal, and the column should not force
+// those languages to lie.
+const (
+	VisibilityPublic  = "public"
+	VisibilityPrivate = "private"
+)
 
 // Relation represents a directed edge between two entities
 type Relation struct {

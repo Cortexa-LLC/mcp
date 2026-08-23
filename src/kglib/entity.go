@@ -7,6 +7,75 @@ import (
 	"github.com/google/uuid"
 )
 
+// entityColumnsLegacy is the projection every database has had since the
+// beginning. entityColumns adds whatever this database actually carries on top.
+//
+// Kept in one place because the columns and the scanner below have to agree,
+// and they were previously duplicated across six queries — a column added to
+// one and missed in another fails at runtime, not at compile time.
+const entityColumnsLegacy = "e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at"
+
+// entityColumns returns the RETURN clause for this database.
+//
+// It has to be per-database rather than a constant because read-only opens
+// never run initSchema, so a database written before a column existed will not
+// have gained it. Kuzu rejects the whole query with "Cannot find property
+// visibility for e" rather than returning null, so asking for a column that is
+// not there breaks every read path — search, federation, remote layers — on any
+// graph that has not been re-indexed since the upgrade.
+func (s *Store) entityColumns() string {
+	if s.hasVisibility {
+		return entityColumnsLegacy + ", e.visibility"
+	}
+	return entityColumnsLegacy
+}
+
+// detectColumns records which optional columns this database carries. Called
+// once at open, for both read-only and read-write opens.
+func (s *Store) detectColumns() {
+	result, err := s.Query("CALL table_info('Entity') RETURN *")
+	if err != nil {
+		// A database too old or too odd to introspect is assumed to lack the
+		// column, which is the safe direction: the legacy projection works
+		// everywhere, it just returns less.
+		return
+	}
+	defer result.Close()
+
+	for result.HasNext() {
+		tuple, err := result.Next()
+		if err != nil {
+			return
+		}
+		row, err := tuple.GetAsSlice()
+		tuple.Close()
+		if err != nil {
+			return
+		}
+		if len(row) > 1 && stringOrEmpty(row[1]) == "visibility" {
+			s.hasVisibility = true
+			return
+		}
+	}
+}
+
+// entityFromRow builds an Entity from a row shaped by entityColumns.
+func entityFromRow(row []any) *Entity {
+	entity := &Entity{
+		ID:        stringOrEmpty(row[0]),
+		Name:      stringOrEmpty(row[1]),
+		Type:      stringOrEmpty(row[2]),
+		ProjectID: stringOrEmpty(row[3]),
+		CreatedAt: timeOrZero(row[4]),
+		UpdatedAt: timeOrZero(row[5]),
+	}
+	// Older rows predate the column entirely, so the slice may be short.
+	if len(row) > 6 {
+		entity.Visibility = stringOrEmpty(row[6])
+	}
+	return entity
+}
+
 // CreateEntity adds a new entity to the knowledge graph
 func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error) {
 	entity := &Entity{
@@ -56,7 +125,7 @@ func (s *Store) GetEntity(id, projectID string) (*Entity, error) {
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.id = $id AND e.project_id = $project_id
-		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		RETURN `+s.entityColumns()+`
 	`, map[string]any{"id": id, "project_id": projectID})
 	if err != nil {
 		return nil, fmt.Errorf("query entity: %w", err)
@@ -78,15 +147,7 @@ func (s *Store) GetEntity(id, projectID string) (*Entity, error) {
 		return nil, fmt.Errorf("get row: %w", err)
 	}
 
-	entity := &Entity{
-		ID:        stringOrEmpty(row[0]),
-		Name:      stringOrEmpty(row[1]),
-		Type:      stringOrEmpty(row[2]),
-		ProjectID: stringOrEmpty(row[3]),
-	}
-
-	entity.CreatedAt = timeOrZero(row[4])
-	entity.UpdatedAt = timeOrZero(row[5])
+	entity := entityFromRow(row)
 
 	return entity, nil
 }
@@ -97,7 +158,7 @@ func (s *Store) GetEntityByName(name, projectID string) (*Entity, error) {
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.name = $name AND e.project_id = $project_id
-		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		RETURN `+s.entityColumns()+`
 		LIMIT 1
 	`, map[string]any{"name": name, "project_id": projectID})
 	if err != nil {
@@ -120,14 +181,7 @@ func (s *Store) GetEntityByName(name, projectID string) (*Entity, error) {
 		return nil, fmt.Errorf("get row: %w", err)
 	}
 
-	entity := &Entity{
-		ID:        stringOrEmpty(row[0]),
-		Name:      stringOrEmpty(row[1]),
-		Type:      stringOrEmpty(row[2]),
-		ProjectID: stringOrEmpty(row[3]),
-	}
-	entity.CreatedAt = timeOrZero(row[4])
-	entity.UpdatedAt = timeOrZero(row[5])
+	entity := entityFromRow(row)
 	return entity, nil
 }
 
@@ -139,7 +193,7 @@ func (s *Store) GetEntityByNameAndType(name, entityType, projectID string) (*Ent
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.name = $name AND e.type = $type AND e.project_id = $project_id
-		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		RETURN `+s.entityColumns()+`
 		LIMIT 1
 	`, map[string]any{"name": name, "type": entityType, "project_id": projectID})
 	if err != nil {
@@ -162,14 +216,7 @@ func (s *Store) GetEntityByNameAndType(name, entityType, projectID string) (*Ent
 		return nil, fmt.Errorf("get row: %w", err)
 	}
 
-	entity := &Entity{
-		ID:        stringOrEmpty(row[0]),
-		Name:      stringOrEmpty(row[1]),
-		Type:      stringOrEmpty(row[2]),
-		ProjectID: stringOrEmpty(row[3]),
-	}
-	entity.CreatedAt = timeOrZero(row[4])
-	entity.UpdatedAt = timeOrZero(row[5])
+	entity := entityFromRow(row)
 	return entity, nil
 }
 
@@ -178,14 +225,14 @@ func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 	stmt := `
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id
-		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		RETURN ` + s.entityColumns() + `
 	`
 	params := map[string]any{"project_id": projectID}
 	if entityType != "" {
 		stmt = `
 			MATCH (e:Entity)
 			WHERE e.project_id = $project_id AND e.type = $type
-			RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+			RETURN ` + s.entityColumns() + `
 		`
 		params["type"] = entityType
 	}
@@ -209,15 +256,7 @@ func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 			return nil, fmt.Errorf("get row: %w", err)
 		}
 
-		entity := &Entity{
-			ID:        stringOrEmpty(row[0]),
-			Name:      stringOrEmpty(row[1]),
-			Type:      stringOrEmpty(row[2]),
-			ProjectID: stringOrEmpty(row[3]),
-		}
-
-		entity.CreatedAt = timeOrZero(row[4])
-		entity.UpdatedAt = timeOrZero(row[5])
+		entity := entityFromRow(row)
 
 		entities = append(entities, entity)
 	}

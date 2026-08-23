@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/cortexa-llc/mcp/kg/internal/mcp"
+	"github.com/cortexa-llc/mcp/kglib"
 )
 
 // RunMCPServer exposes Store APIs as MCP tools over stdio (MCP protocol).
@@ -38,6 +39,21 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 // are where the journaling decision is made — hand-write tools go through
 // withHandWrite, index_project deliberately does not — and that distinction is
 // invisible to any test that can only reach the server's stdio loop.
+// filterPublic drops unexported symbols. Entities with no visibility — files,
+// topics, hand-written knowledge — are kept: they have no API surface to be
+// outside of, and dropping them would make public_only mean something other
+// than what it says.
+func filterPublic(results []*SearchResult) []*SearchResult {
+	kept := make([]*SearchResult, 0, len(results))
+	for _, r := range results {
+		if r.Entity != nil && r.Entity.Visibility == kglib.VisibilityPrivate {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
+}
+
 func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string, personal PersonalConfig) ([]mcp.Tool, map[string]mcp.ToolHandler) {
 	// jsonSchema is a helper to build a minimal JSON Schema object descriptor.
 	jsonSchema := func(props map[string]string, required ...string) map[string]interface{} {
@@ -62,8 +78,8 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 		},
 		{
 			Name:        "search_knowledge",
-			Description: "Hybrid search for entities and observations in the knowledge graph. Returns matching functions, types, files, and topics. Use short, specific terms (1–3 words); each whitespace-separated token is matched independently (OR logic), so prefer concise queries over long phrases.",
-			InputSchema: jsonSchema(map[string]string{"query": "string", "limit": "integer"}, "query"),
+			Description: "Hybrid search for entities and observations in the knowledge graph. Returns matching functions, types, files, and topics. Use short, specific terms (1–3 words); each whitespace-separated token is matched independently (OR logic), so prefer concise queries over long phrases. Unexported symbols are included and rank below equally-relevant exported ones; set public_only to see just a package's API surface.",
+			InputSchema: jsonSchema(map[string]string{"query": "string", "limit": "integer", "public_only": "boolean"}, "query"),
 		},
 		{
 			Name:        "add_entity",
@@ -184,7 +200,14 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 				if lim == 0 {
 					lim = 12
 				}
-				return s.KeywordSearch(projectID, q, int(lim))
+				results, err := s.KeywordSearch(projectID, q, int(lim))
+				if err != nil {
+					return nil, err
+				}
+				if publicOnly, _ := req.Arguments["public_only"].(bool); publicOnly {
+					results = filterPublic(results)
+				}
+				return results, nil
 			})
 		},
 
