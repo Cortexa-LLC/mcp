@@ -240,10 +240,16 @@ func (s *Store) GetTopObservations(entityID, projectID string, limit int) ([]*Ob
 		}
 		tuple.Close()
 
+		// stringOrEmpty, not a bare .(string): a NULL content or entity_id comes
+		// back as a nil interface and a bare assertion panics on it. Nothing in
+		// this process recovers, and the MCP server dispatches tool handlers
+		// synchronously, so that panic ends the agent's whole session rather than
+		// one query. Bulk loading writes these columns through COPY FROM JSON,
+		// which the Go type system never sees.
 		obs := &Observation{
-			ID:       row[0].(string),
-			EntityID: row[1].(string),
-			Content:  row[2].(string),
+			ID:       stringOrEmpty(row[0]),
+			EntityID: stringOrEmpty(row[1]),
+			Content:  stringOrEmpty(row[2]),
 		}
 
 		// Parse timestamp (Kuzu returns timestamps as int64 microseconds)
@@ -302,16 +308,19 @@ func (s *Store) batchGetObservations(entityIDs []string, limit int) (map[string]
 		}
 		tuple.Close()
 
-		entityID := row[1].(string)
+		// This loop runs on every keyword search, so a bare .(string) here makes a
+		// single NULL observation column enough to take down any session that
+		// searches. See GetTopObservations above.
+		entityID := stringOrEmpty(row[1])
 		if counts[entityID] >= limit {
 			continue
 		}
 		counts[entityID]++
 
 		obs := &Observation{
-			ID:       row[0].(string),
+			ID:       stringOrEmpty(row[0]),
 			EntityID: entityID,
-			Content:  row[2].(string),
+			Content:  stringOrEmpty(row[2]),
 		}
 		obs.CreatedAt = timeOrZero(row[3])
 
