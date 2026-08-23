@@ -30,6 +30,74 @@ func (s *Store) entityColumns() string {
 	return entityColumnsLegacy
 }
 
+// createEntityWithID creates an entity under a caller-supplied id.
+//
+// Used by replay to restore an entity under the same source-derived id it had
+// before — "function:<path>:<name>" and friends, which the indexer computes
+// from source text and so reproduces exactly. Without this, an import mints a
+// fresh UUID and every ID hint in the file becomes unresolvable, which throws
+// the restore back onto (name, type) resolution and the collisions it exists to
+// avoid.
+//
+// Only for ids that are stable by construction. Hand-created entities keep
+// CreateEntity's generated UUID, which is meaningless to preserve.
+func (s *Store) createEntityWithID(id, name, entityType, projectID string) (*Entity, error) {
+	entity := &Entity{
+		ID:        id,
+		Name:      name,
+		Type:      entityType,
+		ProjectID: projectID,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	result, err := s.QueryParams(`
+		CREATE (e:Entity {
+			id: $id, name: $name, type: $type, project_id: $project_id,
+			created_at: $created_at, updated_at: $updated_at
+		})
+	`, map[string]any{
+		"id": id, "name": name, "type": entityType, "project_id": projectID,
+		"created_at": entity.CreatedAt, "updated_at": entity.UpdatedAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create entity %s: %w", id, err)
+	}
+	result.Close()
+	return entity, nil
+}
+
+// setEntityVisibility records a symbol's source-language visibility on an entity
+// that already exists. Used by replay to restore what an export captured; the
+// indexer sets the column directly during bulk load.
+func (s *Store) setEntityVisibility(id, visibility, projectID string) error {
+	if !s.hasVisibility {
+		// A database predating the column cannot store it. Not an error: the
+		// entity and its knowledge are intact, only the ranking hint is lost.
+		return nil
+	}
+	result, err := s.QueryParams(`
+		MATCH (e:Entity)
+		WHERE e.id = $id AND e.project_id = $project_id
+		SET e.visibility = $visibility
+	`, map[string]any{"id": id, "project_id": projectID, "visibility": visibility})
+	if err != nil {
+		return fmt.Errorf("set visibility: %w", err)
+	}
+	result.Close()
+	return nil
+}
+
+// visibilityColumn returns ", e.visibility" when this database has the column,
+// and "" when it does not — Kuzu rejects a whole query that names a missing
+// property, so a projection cannot assume it.
+func (s *Store) visibilityColumn() string {
+	if s.hasVisibility {
+		return ", e.visibility"
+	}
+	return ""
+}
+
 // detectColumns records which optional columns this database carries. Called
 // once at open, for both read-only and read-write opens.
 func (s *Store) detectColumns() {

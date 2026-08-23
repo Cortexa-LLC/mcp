@@ -87,7 +87,20 @@ func stableIDHint(id string) string {
 
 // entityRef builds a reference to an entity for the journal.
 func entityRef(e *Entity) *EntityRef {
-	return &EntityRef{Name: e.Name, Type: e.Type, ID: stableIDHint(e.ID)}
+	return newEntityRef(e.ID, e.Name, e.Type)
+}
+
+// newEntityRef is the single constructor for an EntityRef.
+//
+// Journal records and export records are produced by different code that reads
+// entities from different shapes — one from a live *Entity, one from raw query
+// rows — and they diverged: export omitted the ID hint entirely, so an
+// export/import round trip fell back to resolving on (name, type), which is not
+// unique. Restoring a backup of this repo would have reattached hand-written
+// notes to arbitrary same-named symbols, the exact defect the hint exists to
+// prevent. Both paths now build refs here.
+func newEntityRef(id, name, entityType string) *EntityRef {
+	return &EntityRef{Name: name, Type: entityType, ID: stableIDHint(id)}
 }
 
 // JournalRecord is one line of <db>.journal.jsonl.
@@ -104,6 +117,13 @@ type JournalRecord struct {
 	To        *EntityRef `json:"to,omitempty"`
 	RelType   string     `json:"rel,omitempty"`
 	Content   string     `json:"content,omitempty"`
+
+	// Visibility carries an entity's source-language visibility on
+	// entity.create records produced by an export. Hand-writes leave it empty:
+	// they have no source symbol and therefore no visibility. Without it a
+	// restored backup ranked every symbol as public and --public-only returned
+	// unexported ones.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // Journal appends hand-write records to a JSONL file beside a database.
