@@ -2,8 +2,10 @@ package knowledge
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
+	"github.com/cortexa-llc/mcp/kg/internal/remote"
 	"github.com/cortexa-llc/mcp/kglib"
 )
 
@@ -47,6 +49,28 @@ func OpenFederatedStoreWithExtra(aiDir string, scopeConfig *ScopeConfig, readOnl
 	// the primary store last.
 	layers = append(layers, extra...)
 
+	// Remote hub layers rank above the extras (e.g. the personal store) but
+	// below every local layer. LayerConfig.ProjectID stays empty: the hub
+	// resolves each graph's own project ID, and the remote layer ignores the
+	// projectID argument entirely.
+	remoteCount := 0
+	if len(scopeConfig.Remotes) > 0 {
+		hubURL, err := GetHubURL(aiDir)
+		if err != nil || hubURL == "" {
+			fmt.Fprintf(os.Stderr, "Warning: scope %s lists remotes but no hub is configured in .ai/config.json — skipping remote layers\n", scopeConfig.Name)
+		} else {
+			readToken := os.Getenv("KG_HUB_READ_TOKEN")
+			for i, graph := range scopeConfig.Remotes {
+				layers = append(layers, LayerConfig{
+					Name:     "remote:" + graph,
+					Store:    remote.NewLayer(hubURL, graph, readToken),
+					Priority: i + 1,
+				})
+			}
+			remoteCount = len(scopeConfig.Remotes)
+		}
+	}
+
 	// Layer stores are always read-only — a scope can never write to a layer.
 	for i, layerName := range scopeConfig.Layers {
 		layerCfg, err := LoadScopeConfig(aiDir, layerName)
@@ -64,7 +88,7 @@ func OpenFederatedStoreWithExtra(aiDir string, scopeConfig *ScopeConfig, readOnl
 		layers = append(layers, LayerConfig{
 			Name:     layerName,
 			Store:    store,
-			Priority: i + 1, // Lower priority for base layers
+			Priority: remoteCount + i + 1, // Local layers rank above the remotes
 		})
 	}
 
@@ -85,7 +109,7 @@ func OpenFederatedStoreWithExtra(aiDir string, scopeConfig *ScopeConfig, readOnl
 	layers = append(layers, LayerConfig{
 		Name:     scopeConfig.Name,
 		Store:    primaryStore,
-		Priority: len(scopeConfig.Layers) + 10, // Highest priority
+		Priority: remoteCount + len(scopeConfig.Layers) + 10, // Highest priority
 	})
 
 	return kglib.NewFederatedStore(layers), nil

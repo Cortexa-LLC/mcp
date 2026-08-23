@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -210,6 +211,10 @@ type searchRequest struct {
 	Query  string   `json:"query"`
 	Limit  int      `json:"limit"`
 	Graphs []string `json:"graphs"`
+
+	// IncludeLayers expands a per-graph search to the graph's registered
+	// layer graphs (transitively). Ignored by the fan-out endpoint.
+	IncludeLayers bool `json:"include_layers"`
 }
 
 func decodeSearchRequest(r *http.Request) (*searchRequest, error) {
@@ -275,12 +280,111 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 		internalError(w, fmt.Sprintf("search graph %q", name), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+
+	var layersSearched []string
+	if req.IncludeLayers {
+		// Deliberately simpler than kglib's federation: a server-side merge
+		// just needs dedup (higher score wins per entity) + rank.
+		// layersSearched records only layers that actually answered — a layer
+		// whose search failed is logged and excluded, so the field never
+		// over-reports coverage.
+		for _, layer := range expandLayers(reg, name) {
+			layerResults, err := s.searchGraph(layer, reg.Graphs[layer], req.Query, req.Limit)
+			if err != nil {
+				log.Printf("layer search graph %q (layer of %q): %v", layer, name, err)
+				continue
+			}
+			layersSearched = append(layersSearched, layer)
+			results = mergeResults(results, layerResults)
+		}
+		sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+		if len(results) > req.Limit {
+			results = results[:req.Limit]
+		}
+	}
+
+	resp := map[string]any{
 		"graph":      name,
 		"commit":     info.Commit,
 		"project_id": info.ProjectID,
 		"results":    results,
-	})
+	}
+	if len(layersSearched) > 0 {
+		resp["layers_searched"] = layersSearched
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// maxLayerExpansion bounds transitive layer expansion: at most this many
+// graphs are visited, and chains deeper than this are cut off.
+const maxLayerExpansion = 16
+
+// expandLayers returns the transitive layer closure of graph (excluding the
+// graph itself), in breadth-first order. It is cycle-safe via a visited set
+// and bounded by maxLayerExpansion. Layer names missing from the registry or
+// failing path validation are skipped with a log line — registry.json is
+// hand-editable, so validate before anything joins these into paths.
+func expandLayers(reg *Registry, graph string) []string {
+	visited := map[string]bool{graph: true}
+	queue := []string{graph}
+	var out []string
+	for depth := 0; len(queue) > 0 && depth < maxLayerExpansion; depth++ {
+		var next []string
+		for _, g := range queue {
+			info, ok := reg.Graphs[g]
+			if !ok {
+				continue
+			}
+			for _, layer := range info.Layers {
+				if visited[layer] {
+					continue
+				}
+				visited[layer] = true
+				if !validPathComponent(layer) {
+					log.Printf("expand layers of %q: invalid layer name %q — skipping", graph, layer)
+					continue
+				}
+				if _, ok := reg.Graphs[layer]; !ok {
+					log.Printf("expand layers of %q: layer graph %q not on this hub — skipping", graph, layer)
+					continue
+				}
+				if len(out) >= maxLayerExpansion {
+					log.Printf("expand layers of %q: layer set exceeds %d graphs — truncating", graph, maxLayerExpansion)
+					return out
+				}
+				out = append(out, layer)
+				next = append(next, layer)
+			}
+		}
+		queue = next
+	}
+	return out
+}
+
+// mergeResults merges b into a: for entities present in both, the
+// higher-score entry wins. Order is left to the caller's final sort.
+func mergeResults(a, b []*knowledge.SearchResult) []*knowledge.SearchResult {
+	index := make(map[string]int, len(a))
+	for i, r := range a {
+		if r.Entity != nil {
+			index[r.Entity.ID] = i
+		}
+	}
+	for _, r := range b {
+		if r.Entity == nil {
+			a = append(a, r)
+			continue
+		}
+		if i, ok := index[r.Entity.ID]; ok {
+			if r.Score > a[i].Score {
+				a[i] = r
+			}
+			continue
+		}
+		index[r.Entity.ID] = len(a)
+		a = append(a, r)
+	}
+	return a
 }
 
 func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
