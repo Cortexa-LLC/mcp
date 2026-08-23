@@ -136,7 +136,7 @@ func TestSearchResults_CarryTimestampsForRecencyScoring(t *testing.T) {
 	if results[0].Entity.UpdatedAt.IsZero() {
 		t.Fatal("search result has a zero UpdatedAt — recency scoring is inert")
 	}
-	if score := calculateRecencyScore(results[0].Entity.UpdatedAt); score <= 0 {
+	if score := calculateRecencyScore(results[0].Entity.UpdatedAt, time.Now().UTC()); score <= 0 {
 		t.Errorf("a just-created entity should get a recency boost, got %f", score)
 	}
 }

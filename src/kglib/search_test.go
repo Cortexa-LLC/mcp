@@ -559,9 +559,9 @@ func TestCalculateRecencyScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := calculateRecencyScore(tt.timestamp)
+			score := calculateRecencyScore(tt.timestamp, time.Now().UTC())
 			if score < tt.wantMin || score > tt.wantMax {
-				t.Errorf("calculateRecencyScore(%v) = %f, want between %f and %f",
+				t.Errorf("calculateRecencyScore(%v, time.Now().UTC()) = %f, want between %f and %f",
 					tt.timestamp, score, tt.wantMin, tt.wantMax)
 			}
 		})
