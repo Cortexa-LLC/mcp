@@ -91,6 +91,8 @@ func pushScopeDB(root, aiDir, hubURL, seedToken, projectID, scopeName string) er
 	if pushGraphName != "" {
 		graph = pushGraphName
 	}
+	// Layers travel in the hub's namespace too — see hubLayerNames.
+	layers = hubLayerNames(root, aiDir, layers)
 
 	meta, err := loadPushMeta(dbPath, root, projectID)
 	if err != nil {
@@ -124,6 +126,44 @@ func pushScopeDB(root, aiDir, hubURL, seedToken, projectID, scopeName string) er
 		Meta:      *meta,
 		Layers:    layers,
 	})
+}
+
+// hubLayerNames translates a scope's layers — which are local scope names —
+// into the graph names those scopes are published under on the hub.
+//
+// The two namespaces are not the same and must not be conflated. A scope
+// config says `"layers": ["platform"]` because `platform` is a sibling scope in
+// this repo, but that scope is registered on the hub as `<repo>` or
+// `<repo>.platform` (graphname.go). Sending the raw scope name meant the hub's
+// expandLayers found nothing under it and skipped the layer with a log line no
+// client ever sees — so "remote graphs bring their layers" silently resolved to
+// nothing. Worse, if an unrelated repo happened to hold the bare name
+// `platform`, the layer resolved to *that* graph and this repo quietly
+// federated someone else's knowledge.
+//
+// --graph deliberately does NOT apply here. It renames the one database being
+// pushed; a layer is a different graph, pushed by its own invocation and
+// registered under its own derived name, so renaming this push cannot rename
+// what it points at. A repo that wants to pin published names — including the
+// names its layers resolve to — sets `hubGraph` in each scope config, which
+// defaultGraphName already honours for layers as well as for the graph itself.
+func hubLayerNames(root, aiDir string, layers []string) []string {
+	if len(layers) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(layers))
+	seen := make(map[string]bool, len(layers))
+	for _, layer := range layers {
+		// Two scopes can map to one graph (both pinned to the same hubGraph),
+		// and the hub treats a repeated layer as a repeated search.
+		name := defaultGraphName(root, aiDir, layer)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // loadPushMeta reads the provenance stamp from the database, falling back to
