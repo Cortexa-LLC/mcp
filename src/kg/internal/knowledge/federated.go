@@ -57,7 +57,20 @@ func OpenFederatedStoreWithExtra(aiDir string, scopeConfig *ScopeConfig, readOnl
 	if len(scopeConfig.Remotes) > 0 {
 		hubURL, err := GetHubURL(aiDir)
 		if err != nil || hubURL == "" {
-			fmt.Fprintf(os.Stderr, "Warning: scope %s lists remotes but no hub is configured in .ai/config.json — skipping remote layers\n", scopeConfig.Name)
+			// Say so explicitly when the repository names one, because the
+			// symptom otherwise looks like a bug rather than a boundary: the
+			// project clearly expects a hub and the search quietly has none.
+			if suggested := RepoSuggestedHubURL(aiDir); suggested != "" {
+				fmt.Fprintf(os.Stderr,
+					"Warning: scope %s lists remotes and this project names hub %q, but a hub named by "+
+						"a repository is not trusted — it would decide where your KG_HUB_READ_TOKEN is sent. "+
+						"Trust it with 'kg config set-hub %s' if you recognise it. Skipping remote layers\n",
+					scopeConfig.Name, suggested, suggested)
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: scope %s lists remotes but no hub is configured — "+
+					"set one with 'kg config set-hub <url>' or KG_HUB_URL. Skipping remote layers\n",
+					scopeConfig.Name)
+			}
 		} else {
 			readToken := os.Getenv("KG_HUB_READ_TOKEN")
 			for i, graph := range scopeConfig.Remotes {

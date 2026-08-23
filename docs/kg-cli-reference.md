@@ -319,7 +319,11 @@ kg push --commit <sha>                  # override the recorded commit
 kg push --allow-dirty                   # push despite a dirty-tree stamp
 ```
 
-The hub URL comes from `--hub` or the `"hub"` key in `.ai/config.json`.
+The hub URL comes from `--hub`, `KG_HUB_URL`, or `kg config set-hub` — all
+user-controlled. It is deliberately **not** read from the repository: federated
+search sends `KG_HUB_READ_TOKEN` to the hub as a bearer token, so whoever picks
+the URL picks where that credential goes, and a cloned repo must not get to pick.
+A project still chooses which *graphs* to federate via a scope's `remotes`.
 Databases indexed before provenance stamps existed fall back to the current
 git HEAD with a warning — re-run `kg index` to stamp them. A database stamped
 `(dirty)` is refused unless `--allow-dirty` is passed.
