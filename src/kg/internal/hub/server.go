@@ -404,17 +404,31 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	names := req.Graphs
-	if len(names) == 0 {
+	// Every name below is joined into a filesystem path by currentDBPath, so
+	// every name below is validated first — the same rule handleGraphSearch
+	// and expandLayers follow. Registry membership is not a substitute:
+	// registry.json is hand-editable, so a key in it is not proof that the
+	// name is a single, non-navigating path component.
+	var names []string
+	if len(req.Graphs) == 0 {
 		for name := range reg.Graphs {
+			if !validPathComponent(name) {
+				log.Printf("federated search: registry holds invalid graph name %q — skipping", name)
+				continue
+			}
 			names = append(names, name)
 		}
 	} else {
-		for _, name := range names {
+		for _, name := range req.Graphs {
+			if !validPathComponent(name) {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid graph name %q", name))
+				return
+			}
 			if _, ok := reg.Graphs[name]; !ok {
 				writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 				return
 			}
+			names = append(names, name)
 		}
 	}
 
@@ -616,14 +630,44 @@ func (s *Server) stage(name string, body io.Reader) (tmpDir string, err error) {
 	return tmpDir, nil
 }
 
+// replaceSymlink points link at target atomically: create a temp symlink in
+// dir, then rename it over. dir must be the directory holding link so the
+// rename stays within one filesystem.
+func replaceSymlink(dir, link, target string) error {
+	tmp := filepath.Join(dir, "current.tmp-"+randomSuffix())
+	if err := os.Symlink(target, tmp); err != nil {
+		return fmt.Errorf("create symlink: %w", err)
+	}
+	if err := os.Rename(tmp, link); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename symlink: %w", err)
+	}
+	return nil
+}
+
 // install atomically installs a staged database as graphs/<name>/<commit>,
-// repoints `current`, prunes stale commit directories, and updates the
-// registry. Caller holds s.mu and owns tmpDir until install returns.
-func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) (err error) {
+// repoints `current`, updates the registry, and only then prunes stale commit
+// directories. Caller holds s.mu and owns tmpDir until install returns.
+//
+// Invariant: install either fully succeeds or leaves the graph exactly as it
+// found it. Every step that can fail — moving the staged directory into place,
+// repointing `current`, writing the registry — happens before the one step
+// that cannot be undone (pruning old commit directories), and each is rolled
+// back if a later one fails.
+//
+// That invariant is what keeps `current` and the registry entry from
+// disagreeing about which commit is installed. A search reads the database
+// from `current` but the ProjectID it queries with from the registry, so a
+// mismatch is an HTTP 200 with zero results whenever the project ID changed,
+// plus a stale advertised commit that no later read can correct. The registry
+// used to be written last, after `current` had already been repointed and the
+// stashed directory deleted, and a registry write error returned without
+// undoing either — leaving exactly that split.
+func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) error {
 	gdir := s.graphDir(name)
 
 	// If this commit was pushed before, move the existing dir aside so the
-	// rename succeeds; restore it if the swap fails half-way.
+	// rename succeeds; restore it if anything below fails.
 	commitDir := filepath.Join(gdir, commit)
 	oldDir := ""
 	if _, serr := os.Lstat(commitDir); serr == nil {
@@ -632,35 +676,59 @@ func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) (e
 			return fmt.Errorf("stash previous commit directory: %w", err)
 		}
 	}
-	restoreOld := func() {
+
+	// restoreCommitDir undoes the staging rename. When nothing was stashed,
+	// "as it was" means commitDir gone: leaving the staged data behind would
+	// strand a commit directory the registry never mentions, and handleSeed's
+	// own RemoveAll(tmpDir) cannot clean it up once tmpDir has been renamed.
+	restoreCommitDir := func() {
+		_ = os.RemoveAll(commitDir)
 		if oldDir != "" {
-			_ = os.RemoveAll(commitDir)
 			_ = os.Rename(oldDir, commitDir)
 		}
 	}
 
 	if err := os.Rename(tmpDir, commitDir); err != nil {
-		restoreOld()
+		restoreCommitDir()
 		return fmt.Errorf("install commit directory: %w", err)
 	}
 
-	// Remember the previous current target before repointing, for pruning.
-	prevTarget, _ := os.Readlink(filepath.Join(gdir, "current"))
+	// Remember the previous current target before repointing, for pruning and
+	// for rollback.
+	currentLink := filepath.Join(gdir, "current")
+	prevTarget, _ := os.Readlink(currentLink)
 
-	// Repoint "current" atomically: create a temp symlink, rename over.
-	linkTmp := filepath.Join(gdir, "current.tmp-"+randomSuffix())
-	if err := os.Symlink(commit, linkTmp); err != nil {
-		restoreOld()
-		return fmt.Errorf("create current symlink: %w", err)
-	}
-	if err := os.Rename(linkTmp, filepath.Join(gdir, "current")); err != nil {
-		os.Remove(linkTmp)
-		restoreOld()
+	if err := replaceSymlink(gdir, currentLink, commit); err != nil {
+		restoreCommitDir()
 		return fmt.Errorf("update current symlink: %w", err)
 	}
+	restoreCurrent := func() {
+		if prevTarget == "" {
+			_ = os.Remove(currentLink)
+			return
+		}
+		_ = replaceSymlink(gdir, currentLink, prevTarget)
+	}
 
-	// Prune: keep the current target and the immediately previous target;
-	// leave in-flight .tmp-*/.old-* dirs alone, except our own .old dir.
+	// The registry is the last thing that can fail, and it is written while
+	// both the old and the new commit directories still exist, so a failure
+	// here can be walked all the way back.
+	reg, err := loadRegistry(s.dataDir)
+	if err != nil {
+		restoreCurrent()
+		restoreCommitDir()
+		return err
+	}
+	reg.Graphs[name] = info
+	if err := saveRegistry(s.dataDir, reg); err != nil {
+		restoreCurrent()
+		restoreCommitDir()
+		return err
+	}
+
+	// Committed. Prune is irreversible, so it runs only now: keep the current
+	// target and the immediately previous target; leave in-flight
+	// .tmp-*/.old-* dirs alone, except our own .old dir.
 	entries, rerr := os.ReadDir(gdir)
 	if rerr == nil {
 		for _, e := range entries {
@@ -677,12 +745,5 @@ func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) (e
 	if oldDir != "" {
 		_ = os.RemoveAll(oldDir)
 	}
-
-	// Update the registry.
-	reg, err := loadRegistry(s.dataDir)
-	if err != nil {
-		return err
-	}
-	reg.Graphs[name] = info
-	return saveRegistry(s.dataDir, reg)
+	return nil
 }
