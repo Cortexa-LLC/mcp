@@ -10,6 +10,7 @@ type (
 	Relation     = kglib.Relation
 	SearchResult = kglib.SearchResult
 	SearchConfig = kglib.SearchConfig
+	SearchFilter = kglib.SearchFilter
 	Embedder     = kglib.Embedder
 	KGMeta       = kglib.KGMeta
 )

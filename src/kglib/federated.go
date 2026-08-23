@@ -169,7 +169,20 @@ func (fs *FederatedStore) HybridSearch(projectID, query string, queryEmbedding [
 
 // KeywordSearch performs keyword search across all layers and merges results
 func (fs *FederatedStore) KeywordSearch(projectID, query string, limit int) ([]*SearchResult, error) {
-	return fs.HybridSearch(projectID, query, nil, SearchConfig{Limit: limit})
+	return fs.KeywordSearchFiltered(projectID, query, limit, SearchFilter{})
+}
+
+// KeywordSearchFiltered is KeywordSearch with the filter pushed down to every
+// layer, so each one spends its share of the limit on rows the caller wants
+// rather than on rows the caller will discard.
+func (fs *FederatedStore) KeywordSearchFiltered(projectID, query string, limit int, filter SearchFilter) ([]*SearchResult, error) {
+	// DefaultSearchConfig, not a bare Limit: a zero RecencyWeight leaves every
+	// local result at exactly the score KeywordSearch assigns, which made local
+	// and remote scores incomparable at the merge.
+	cfg := DefaultSearchConfig()
+	cfg.Limit = limit
+	cfg.Filter = filter
+	return fs.HybridSearch(projectID, query, nil, cfg)
 }
 
 // VectorSearch performs vector search across all layers and merges results
