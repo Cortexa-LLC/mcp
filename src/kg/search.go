@@ -120,7 +120,7 @@ func searchScope(aiDir, projectID, scopeName, query string) error {
 	}
 
 	// Nothing to merge: read the single database directly.
-	if len(scopeConfig.Layers) == 0 && len(extra) == 0 {
+	if len(scopeConfig.Layers) == 0 && len(scopeConfig.Remotes) == 0 && len(extra) == 0 {
 		store, err := knowledge.OpenStoreReadOnly(filepath.Join(aiDir, scopeConfig.Database))
 		if err != nil {
 			return err

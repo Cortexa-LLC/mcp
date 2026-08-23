@@ -9,7 +9,7 @@ only what you need. Released under the [MIT No Attribution License](LICENSE.md).
 | Server | Description | CGO |
 |--------|-------------|-----|
 | [markitdown](src/markitdown/) | Convert documents to Markdown (HTML, PDF, DOCX, XLSX, PPTX, images) | No |
-| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions. Supports multi-scope graphs for monorepos, federated across layers, plus a personal store. | Yes |
+| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions. Supports multi-scope graphs for monorepos, federated across layers, plus a personal store. Graphs can also be pushed to a shared hub (`kg hub serve`) and searched from other projects as remote layers. | Yes |
 
 Plus one shared library, not installed as a binary:
 
@@ -24,11 +24,13 @@ graph LR
     KG["kg\nKnowledge graph"]
     KGDB[(".ai/knowledge.db\nper project")]
     PERSONAL[("~/.kg/knowledge.db\nper user")]
+    HUB["kg hub serve\nshared hub, per org"]
 
     Client -->|stdio| MD
     Client -->|stdio| KG
     KG --> KGDB
     KG -->|"--personal / --with-personal"| PERSONAL
+    KG -->|"HTTP: kg push / remotes"| HUB
 ```
 
 Each server is a self-contained Go binary with its own `go.mod`. No server depends on
@@ -145,6 +147,7 @@ if preferred.
 | [docs/kg-scopes.md](docs/kg-scopes.md) | Multi-scope monorepo graphs and federated (layered) search — configuration and commands |
 | [docs/kg-scopes-implementation.md](docs/kg-scopes-implementation.md) | How scopes and federation are implemented internally |
 | [docs/kg-personal-store.md](docs/kg-personal-store.md) | The personal knowledge store — creating it, writing to it, and federating it into project searches |
+| [docs/kg-shared-service.md](docs/kg-shared-service.md) | The shared knowledge hub — running it, seeding it with `kg push`, and searching hub graphs from other projects via `remotes` |
 | [src/kglib/README.md](src/kglib/README.md) | kglib library API, including `FederatedStore` merge semantics |
 | [skills/README.md](skills/README.md) | Claude Code skills built on these servers, and how to install them |
 | [docs/kg-claude-integration.md](docs/kg-claude-integration.md) | KG patterns for CLAUDE.md, reducing re-investigation, decision logging, cross-session checkpointing |

@@ -295,7 +295,7 @@ Push already-indexed scope databases to a shared knowledge hub (see
 `kg hub serve`). Each graph carries its provenance stamp — git commit, repo
 URL, dirty flag — and its scope's layer topology, so the hub knows exactly
 which commit each graph reflects. Requires `KG_HUB_SEED_TOKEN` in the
-environment.
+environment. Full guide: [kg-shared-service.md](kg-shared-service.md).
 
 ```bash
 KG_HUB_SEED_TOKEN=... kg push --hub http://hub.internal:7411   # default scope
@@ -344,7 +344,7 @@ HTTP API (reads take `Authorization: Bearer <read-token>` when configured):
 | `GET /healthz` | Liveness check, no auth |
 | `GET /v1/graphs` | List hosted graphs with provenance |
 | `GET /v1/graphs/{name}` | One graph's provenance |
-| `POST /v1/graphs/{name}/search` | `{"query": "...", "limit": 20}` → ranked results |
+| `POST /v1/graphs/{name}/search` | `{"query": "...", "limit": 20}` → ranked results; `"include_layers": true` also searches the graph's hub-side layers |
 | `POST /v1/search` | Same body plus optional `"graphs": [...]` — search many graphs |
 | `PUT /v1/graphs/{name}` | Seed a graph (used by `kg push`) |
 
@@ -371,6 +371,28 @@ team-a    9c81d2e4f0aa (dirty)  2026-08-20 10:02  platform  monorepo
 ```
 
 Uses `KG_HUB_READ_TOKEN` from the environment when the hub requires read auth.
+
+---
+
+### `kg hub status`
+
+Compare the hub's copy of every graph related to this project — the active scope's
+`remotes` plus any local scope names the hub also hosts — against local git history.
+
+```bash
+kg hub status
+kg hub status --hub http://hub.internal:7411 --scope team-a
+```
+
+```
+NAME      COMMIT        INDEXED           STATUS
+platform  3f2a91c04b7d  2026-08-20 09:14  hub is 4 commit(s) behind local HEAD
+team-a    9c81d2e4f0aa  2026-08-20 10:02  up to date with local HEAD
+```
+
+`not in local history (different repo?)` is normal for a remote graph pushed from
+another repository. Consuming hub graphs via `remotes` in a scope config is covered in
+[kg-shared-service.md](kg-shared-service.md).
 
 ---
 
