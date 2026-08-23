@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
+	"github.com/cortexa-llc/mcp/kglib"
 	"github.com/spf13/cobra"
 )
 
@@ -176,6 +177,14 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 		fmt.Printf("   Entities:          %d\n", appStats.Entities)
 		fmt.Printf("   Observations:      %d\n", appStats.Observations)
 		fmt.Printf("   Duration:          %.3fs\n", time.Since(appStart).Seconds())
+	}
+
+	// Indexing began by clearing every entity for this project, which takes the
+	// hand-written ones with it — they share the project ID. The journal is the
+	// only copy of those, so replay them back now that the derived content is
+	// in place. This runs on every index, not only after a format migration.
+	if _, err := restoreHandWrites(store, dbPath, kglib.JournalPath(dbPath), os.Stdout); err != nil {
+		fmt.Printf("Warning: restoring hand-written knowledge failed: %v\n", err)
 	}
 
 	// Stamp provenance so the database records which commit it reflects

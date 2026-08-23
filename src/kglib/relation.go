@@ -6,13 +6,14 @@ import (
 
 // CreateRelation creates a directed relationship between two entities
 func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
-	// Verify both entities exist and belong to this project
-	_, err := s.GetEntity(fromID, projectID)
+	// Verify both entities exist and belong to this project. Both ends are kept
+	// so the journal can name them by (name, type) rather than by UUID.
+	from, err := s.GetEntity(fromID, projectID)
 	if err != nil {
 		return fmt.Errorf("source entity: %w", err)
 	}
 
-	_, err = s.GetEntity(toID, projectID)
+	to, err := s.GetEntity(toID, projectID)
 	if err != nil {
 		return fmt.Errorf("target entity: %w", err)
 	}
@@ -37,6 +38,16 @@ func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
 		return fmt.Errorf("create relation: %w", err)
 	}
 	defer result.Close()
+
+	if err := s.appendJournal(JournalRecord{
+		Op:        OpCreateRelation,
+		ProjectID: projectID,
+		From:      &EntityRef{Name: from.Name, Type: from.Type},
+		To:        &EntityRef{Name: to.Name, Type: to.Type},
+		RelType:   relType,
+	}); err != nil {
+		return errJournalNote(err)
+	}
 
 	return nil
 }
@@ -91,12 +102,12 @@ func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
 	}
 
 	// Verify both entities exist and belong to this project
-	_, err := s.GetEntity(fromID, projectID)
+	from, err := s.GetEntity(fromID, projectID)
 	if err != nil {
 		return fmt.Errorf("source entity: %w", err)
 	}
 
-	_, err = s.GetEntity(toID, projectID)
+	to, err := s.GetEntity(toID, projectID)
 	if err != nil {
 		return fmt.Errorf("target entity: %w", err)
 	}
@@ -117,6 +128,16 @@ func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
 		return fmt.Errorf("delete relation: %w", err)
 	}
 	defer result.Close()
+
+	if err := s.appendJournal(JournalRecord{
+		Op:        OpDeleteRelation,
+		ProjectID: projectID,
+		From:      &EntityRef{Name: from.Name, Type: from.Type},
+		To:        &EntityRef{Name: to.Name, Type: to.Type},
+		RelType:   relType,
+	}); err != nil {
+		return errJournalNote(err)
+	}
 
 	return nil
 }

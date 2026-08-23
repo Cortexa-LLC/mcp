@@ -27,6 +27,18 @@ type KeywordSearcher interface {
 }
 
 func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string, personal PersonalConfig) error {
+	tools, handlers := buildTools(aiDir, scopeConfig, projectID, projectRoot, personal)
+	server := mcp.NewServer(tools, handlers, bufio.NewReader(os.Stdin), os.Stdout)
+	return server.Serve()
+}
+
+// buildTools assembles the MCP tool definitions and their handlers.
+//
+// Split out from RunMCPServer so the handlers can be exercised directly. They
+// are where the journaling decision is made — hand-write tools go through
+// withHandWrite, index_project deliberately does not — and that distinction is
+// invisible to any test that can only reach the server's stdio loop.
+func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot string, personal PersonalConfig) ([]mcp.Tool, map[string]mcp.ToolHandler) {
 	// jsonSchema is a helper to build a minimal JSON Schema object descriptor.
 	jsonSchema := func(props map[string]string, required ...string) map[string]interface{} {
 		properties := map[string]interface{}{}
@@ -115,6 +127,18 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 		return fn(s)
 	}
 
+	// withHandWrite is withRW plus journaling, for the tools an agent uses to
+	// record knowledge by hand. Those writes have no source to be rebuilt from
+	// after a Kuzu storage-format upgrade, so each one is also appended to
+	// <db>.journal.jsonl for replay. index_project deliberately uses plain
+	// withRW: its output is derived from the tree and is rebuilt, not replayed.
+	withHandWrite := func(fn func(*Store) (any, error)) (any, error) {
+		return withRW(func(s *Store) (any, error) {
+			s.EnableJournal()
+			return fn(s)
+		})
+	}
+
 	// withSearch opens the appropriate store for search operations.
 	// Uses federated store if scope has layers, otherwise single store.
 	withSearch := func(fn func(KeywordSearcher) (any, error)) (any, error) {
@@ -200,7 +224,7 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 		},
 
 		"add_entity": func(req *mcp.ToolCallRequest) (any, error) {
-			return withRW(func(s *Store) (any, error) {
+			return withHandWrite(func(s *Store) (any, error) {
 				name, _ := req.Arguments["name"].(string)
 				typeStr, _ := req.Arguments["type"].(string)
 				return s.CreateEntity(name, typeStr, projectID)
@@ -208,7 +232,7 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 		},
 
 		"add_observation": func(req *mcp.ToolCallRequest) (any, error) {
-			return withRW(func(s *Store) (any, error) {
+			return withHandWrite(func(s *Store) (any, error) {
 				entityID, _ := req.Arguments["entity_id"].(string)
 				content, _ := req.Arguments["content"].(string)
 				return s.CreateObservation(entityID, content, projectID)
@@ -216,7 +240,7 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 		},
 
 		"link_entities": func(req *mcp.ToolCallRequest) (any, error) {
-			return withRW(func(s *Store) (any, error) {
+			return withHandWrite(func(s *Store) (any, error) {
 				from, _ := req.Arguments["from_id"].(string)
 				rel, _ := req.Arguments["relation"].(string)
 				to, _ := req.Arguments["to_id"].(string)
@@ -249,6 +273,5 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 		handlers[name] = handler
 	}
 
-	server := mcp.NewServer(tools, handlers, bufio.NewReader(os.Stdin), os.Stdout)
-	return server.Serve()
+	return tools, handlers
 }
