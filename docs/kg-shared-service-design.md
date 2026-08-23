@@ -512,10 +512,20 @@ Three distinct migration concerns, with different answers:
 - **Scale expectations:** how many repos, how large, how many clients? Affects whether
   the fan-out endpoint is worth building, and whether remote-layer search needs to stop
   being sequential (currently one 3s timeout per layer, in series).
-- **Naming:** one hub per org makes graph names org-global; prefix with project
-  (`monorepo/platform`)? Live if more than one repo pushes — Harvana and this repo are
-  both cortexa.com work, so a collision on a generic name like `platform` is plausible
-  rather than hypothetical.
+- ~~**Naming:**~~ **Answered:** graph names are `<repo>` for a repo's default scope (or
+  a repo with no scopes) and `<repo>.<scope>` otherwise, with `<repo>` taken from the git
+  remote. Repo names are unique within a GitHub org by construction, and a hub serves one
+  org, so no owner segment is needed. The default scope keeps the bare name so a
+  single-project meta-repo stays `depop` and adding a second scope later does not rename
+  the first one's graph.
+
+  Separator is `.`, not the `/` this question originally proposed: graph names become
+  single filesystem path components on the hub, and `graphNameRE` rejects `/` — that
+  hardening (6a20b7d) postdates the question.
+
+  Overridable per-push with `--graph` and per-scope with `hubGraph` in the scope config.
+  Independently, the hub now refuses a push to a graph another repo seeded (`X-KG-Force`
+  overrides), so a bad override fails loudly rather than replacing someone's knowledge.
 - **Deployment artifact:** systemd unit with a natively-built binary, or the Phase 2
   container image? The native path needs the CGO/Kuzu binary built against the host's
   glibc; the container sidesteps that. No systemd unit exists yet either way.
