@@ -1,6 +1,7 @@
 package kglib
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -379,3 +380,135 @@ func TestFederatedStore_PrimaryStore(t *testing.T) {
 		t.Error("PrimaryStore on an empty federation should be nil")
 	}
 }
+
+// Go randomises map iteration and the rank sort is stable, so a merge that
+// converts the map to a slice without ordering it first returns a different
+// result set on identical back-to-back calls — and ties are the norm here,
+// since KeywordSearch assigns every result a score of exactly 1.0.
+func TestFederatedSearchIsDeterministic(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	makeLayer := func(name string, names []string) LayerConfig {
+		store, err := OpenStore(filepath.Join(tmpDir, name+".db"), testSchemaConfig())
+		if err != nil {
+			t.Fatalf("OpenStore: %v", err)
+		}
+		for _, n := range names {
+			if _, err := store.CreateEntity(n, "topic", "p"); err != nil {
+				t.Fatalf("CreateEntity: %v", err)
+			}
+		}
+		// Identical timestamps, so the recency term cannot distinguish results
+		// and every score ties. Ties are what expose ordering that depends on
+		// map iteration; distinct scores would sort deterministically no matter
+		// how the slice was built, and the test would pass either way.
+		fixed, err := store.QueryParams(
+			`MATCH (e:Entity) WHERE e.project_id = $p SET e.updated_at = $ts`,
+			map[string]any{"p": "p", "ts": time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+		if err != nil {
+			t.Fatalf("normalise timestamps: %v", err)
+		}
+		fixed.Close()
+		return LayerConfig{Name: name, Store: store, Priority: len(name)}
+	}
+
+	var entities []string
+	for i := 0; i < 30; i++ {
+		entities = append(entities, fmt.Sprintf("shared-topic-%02d", i))
+	}
+	fs := NewFederatedStore([]LayerConfig{
+		makeLayer("base", entities[:15]),
+		makeLayer("primary", entities[15:]),
+	})
+	defer fs.Close()
+
+	first, err := fs.KeywordSearch("p", "shared-topic", 10)
+	if err != nil {
+		t.Fatalf("KeywordSearch: %v", err)
+	}
+	ids := func(rs []*SearchResult) []string {
+		out := make([]string, 0, len(rs))
+		for _, r := range rs {
+			out = append(out, r.Entity.ID)
+		}
+		return out
+	}
+	want := ids(first)
+
+	for i := 0; i < 8; i++ {
+		again, err := fs.KeywordSearch("p", "shared-topic", 10)
+		if err != nil {
+			t.Fatalf("KeywordSearch: %v", err)
+		}
+		got := ids(again)
+		if len(got) != len(want) {
+			t.Fatalf("run %d returned %d results, first run returned %d", i, len(got), len(want))
+		}
+		sameSet := map[string]bool{}
+		for _, id := range want {
+			sameSet[id] = true
+		}
+		missing := 0
+		for _, id := range got {
+			if !sameSet[id] {
+				missing++
+			}
+		}
+		for j := range got {
+			if got[j] != want[j] {
+				t.Fatalf("run %d differs from the first at position %d: %s vs %s (%d of %d results are a different SET)\n"+
+					"identical queries against an unchanged database must return the same results",
+					i, j, got[j], want[j], missing, len(got))
+			}
+		}
+	}
+}
+
+// A supporting layer failing degrades the answer. The primary layer failing
+// means there is no answer — and reporting that as an empty result set tells an
+// agent the project has no knowledge, which is a different thing entirely.
+func TestFederatedSearchFailsWhenPrimaryLayerFails(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	good, err := OpenStore(filepath.Join(tmpDir, "good.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if _, err := good.CreateEntity("auth", "topic", "p"); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	fs := NewFederatedStore([]LayerConfig{
+		{Name: "supporting", Store: failingLayer{}, Priority: 1},
+		{Name: "primary", Store: good, Priority: 10},
+	})
+	defer fs.Close()
+
+	// A supporting layer failing must not stop local search answering.
+	results, err := fs.KeywordSearch("p", "auth", 10)
+	if err != nil {
+		t.Fatalf("a failing supporting layer broke the whole search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("local results were lost when a supporting layer failed")
+	}
+
+	// The primary failing is a failure.
+	broken := NewFederatedStore([]LayerConfig{
+		{Name: "supporting", Store: good, Priority: 1},
+		{Name: "primary", Store: failingLayer{}, Priority: 10},
+	})
+	defer broken.Close()
+
+	if _, err := broken.KeywordSearch("p", "auth", 10); err == nil {
+		t.Error("a failing primary layer returned no error — indistinguishable from an empty graph")
+	}
+}
+
+// failingLayer is a SearchLayer that always errors.
+type failingLayer struct{}
+
+func (failingLayer) HybridSearch(projectID, query string, embedding []float32, config SearchConfig) ([]*SearchResult, error) {
+	return nil, fmt.Errorf("simulated layer failure")
+}
+func (failingLayer) Close() error { return nil }

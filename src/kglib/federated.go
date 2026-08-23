@@ -3,7 +3,7 @@ package kglib
 import (
 	"fmt"
 	"os"
-	"sort"
+	"time"
 )
 
 // SearchLayer is anything that can answer a federated search: a local Kuzu
@@ -89,16 +89,35 @@ func (fs *FederatedStore) PrimaryStore() *Store {
 	return store
 }
 
+// isPrimary reports whether a layer is the project's own graph rather than a
+// supporting one.
+//
+// Priorities are relative — personal store 0, remotes 1..R, local layers above
+// those, primary highest — so there is no constant to compare against. Layers
+// are ordered lowest to highest with the primary last, which is the same
+// assumption PrimaryStore makes.
+func (fs *FederatedStore) isPrimary(l *layeredStore) bool {
+	return len(fs.layers) > 0 && l.name == fs.layers[len(fs.layers)-1].name
+}
+
 // HybridSearch performs hybrid search across all layers and merges results.
 // Results from higher-priority layers override lower-priority duplicates.
 func (fs *FederatedStore) HybridSearch(projectID, query string, queryEmbedding []float32, config SearchConfig) ([]*SearchResult, error) {
 	if config.Limit == 0 {
 		config = DefaultSearchConfig()
 	}
+	// One clock for the whole federated query. Each layer would otherwise
+	// sample its own, and results queried microseconds apart would carry
+	// recency scores that differ in their last digits — enough to reorder
+	// results that should tie, differently on every run.
+	if config.Now.IsZero() {
+		config.Now = time.Now().UTC()
+	}
 
 	// Collect results from all layers
 	allResults := make(map[string]*SearchResult) // entityID -> result
 	layerSources := make(map[string]string)      // entityID -> layer name
+	var failures []string
 
 	for _, layer := range fs.layers {
 		// Query this layer, honouring a per-layer project ID override
@@ -109,8 +128,20 @@ func (fs *FederatedStore) HybridSearch(projectID, query string, queryEmbedding [
 
 		results, err := layer.store.HybridSearch(layerProjectID, query, queryEmbedding, config)
 		if err != nil {
-			// Warn and continue with the other layers. This goes to stderr:
-			// callers embedded in an MCP server own stdout for JSON-RPC.
+			// A supporting layer that fails degrades the answer; the primary
+			// one failing means the answer is not an answer.
+			//
+			// Treating both as a warning made a locked, mid-migration or
+			// format-incompatible primary database indistinguishable from a
+			// project with no knowledge in it — and in MCP stdio mode the
+			// warning goes to a stderr the client never reads, so the agent is
+			// told, in effect, that the project is empty.
+			if fs.isPrimary(layer) {
+				return nil, fmt.Errorf("search in primary layer %s: %w", layer.name, err)
+			}
+			// Supporting layers still degrade rather than fail: a hub being
+			// unreachable should not stop local search from answering.
+			failures = append(failures, fmt.Sprintf("%s: %v", layer.name, err))
 			fmt.Fprintf(os.Stderr, "Warning: search in layer %s failed: %v\n", layer.name, err)
 			continue
 		}
@@ -148,16 +179,16 @@ func (fs *FederatedStore) HybridSearch(projectID, query string, queryEmbedding [
 		}
 	}
 
-	// Convert map to sorted slice
 	merged := make([]*SearchResult, 0, len(allResults))
 	for _, result := range allResults {
 		merged = append(merged, result)
 	}
 
-	// Sort by score descending
-	sort.Slice(merged, func(i, j int) bool {
-		return merged[i].Score > merged[j].Score
-	})
+	// rankResults, not a bare score sort: this path skipped the visibility
+	// ordering entirely, so a federated search ranked unexported symbols
+	// exactly as a non-federated one did not. It is also a total order, which
+	// is what keeps the merge deterministic despite being built from a map.
+	rankResults(merged, config.visibilityPenalty())
 
 	// Apply limit
 	if len(merged) > config.Limit {

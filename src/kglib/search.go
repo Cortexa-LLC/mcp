@@ -13,6 +13,12 @@ type SearchConfig struct {
 	// Filter narrows results in the database rather than afterwards.
 	Filter SearchFilter
 
+	// Now is the reference instant for recency scoring. Zero means "sample it".
+	// A federated search sets it once so every layer scores against the same
+	// clock; without that, layers queried microseconds apart produce scores
+	// that cannot be compared and an order that changes between runs.
+	Now time.Time
+
 	KeywordWeight float64 // α — keyword match weight, default 0.4
 	RecencyWeight float64 // β — recency boost weight, default 0.1
 	Limit         int     // maximum results to return, default 20
@@ -43,6 +49,14 @@ type SearchFilter struct {
 // recency score of at most 1 — or a recently-touched unexported symbol
 // outranks an exported one of equal relevance and the demotion is not reliable.
 const defaultVisibilityPenalty = 0.15
+
+// recencyNow returns the reference instant for recency scoring.
+func (c SearchConfig) recencyNow() time.Time {
+	if c.Now.IsZero() {
+		return time.Now().UTC()
+	}
+	return c.Now
+}
 
 // visibilityPenalty returns a penalty that still dominates this config's
 // recency weight, so a caller raising RecencyWeight does not silently disable
@@ -113,6 +127,13 @@ func (s *Store) KeywordSearchFiltered(projectID, query string, limit int, filter
 		visibilityClause = fmt.Sprintf("\n\t\t  AND (e.visibility IS NULL OR e.visibility <> '%s')", VisibilityPrivate)
 	}
 
+	// The id tiebreak is what makes truncation reproducible. Ordering by
+	// updated_at alone leaves rows with equal timestamps in whatever order the
+	// engine yields, and LIMIT then keeps an arbitrary subset of them — so two
+	// identical queries against an unchanged database return different results.
+	// Indexed rows share a timestamp routinely: the indexer stamps one `now`
+	// per file, so every symbol in a file ties.
+	//
 	// LIMIT takes an integer expression; using %d (not user input) is safe here.
 	cypherQuery := fmt.Sprintf(`
 		MATCH (e:Entity)
@@ -123,7 +144,7 @@ func (s *Store) KeywordSearchFiltered(projectID, query string, limit int, filter
 		         WHERE %s
 		       })
 		RETURN DISTINCT `+s.entityColumns()+`
-		ORDER BY e.updated_at DESC
+		ORDER BY e.updated_at DESC, e.id
 		LIMIT %d
 	`, nameClause, obsClause, limit)
 
@@ -184,6 +205,13 @@ func (s *Store) KeywordSearchFiltered(projectID, query string, limit int, filter
 
 // GetTopObservations retrieves the most recent observations for an entity
 func (s *Store) GetTopObservations(entityID, projectID string, limit int) ([]*Observation, error) {
+	// The id tiebreak is what makes truncation reproducible. Ordering by
+	// updated_at alone leaves rows with equal timestamps in whatever order the
+	// engine yields, and LIMIT then keeps an arbitrary subset of them — so two
+	// identical queries against an unchanged database return different results.
+	// Indexed rows share a timestamp routinely: the indexer stamps one `now`
+	// per file, so every symbol in a file ties.
+	//
 	// LIMIT takes an integer expression; using %d (not user input) is safe here.
 	query := fmt.Sprintf(`
 		MATCH (o:Observation)
@@ -407,6 +435,9 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 	if config.Limit == 0 {
 		config = DefaultSearchConfig()
 	}
+	if config.Now.IsZero() {
+		config.Now = time.Now().UTC()
+	}
 
 	// Collect results from both search methods
 	var allResults []*SearchResult
@@ -442,17 +473,17 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 		}
 	}
 
-	// Convert map back to slice
+	// Order is imposed by rankResults below, which is a total order — map
+	// iteration order here does not survive it.
 	var hybridResults []*SearchResult
 	for _, result := range entityScores {
 		// Apply recency boost
-		recencyScore := calculateRecencyScore(result.Entity.UpdatedAt)
+		recencyScore := calculateRecencyScore(result.Entity.UpdatedAt, config.recencyNow())
 		result.Score = result.Score + config.RecencyWeight*recencyScore
 		result.MatchType = "hybrid"
 		hybridResults = append(hybridResults, result)
 	}
 
-	// Sort by score descending
 	rankResults(hybridResults, config.visibilityPenalty())
 
 	// Limit results
@@ -481,9 +512,27 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 // covers files, markdown topics and hand-written knowledge, and hand-written
 // knowledge is the last thing that should sink below an exported getter.
 func rankResults(results []*SearchResult, penalty float64) {
-	sort.SliceStable(results, func(i, j int) bool {
-		return effectiveScore(results[i], penalty) > effectiveScore(results[j], penalty)
+	sort.Slice(results, func(i, j int) bool {
+		si, sj := effectiveScore(results[i], penalty), effectiveScore(results[j], penalty)
+		if si != sj {
+			return si > sj
+		}
+		// A total order, not a stable sort over whatever order the caller
+		// happened to build. Results are collected out of maps, and Go
+		// randomises map iteration, so "stable" only preserves randomness —
+		// identical queries against an unchanged database returned different
+		// results because the limit then truncated a differently-ordered slice.
+		// Ties are the normal case here: KeywordSearch scores everything 1.0,
+		// and the indexer stamps one timestamp per file so recency ties too.
+		return entityIDOf(results[i]) < entityIDOf(results[j])
 	})
+}
+
+func entityIDOf(r *SearchResult) string {
+	if r.Entity == nil {
+		return ""
+	}
+	return r.Entity.ID
 }
 
 func effectiveScore(r *SearchResult, penalty float64) float64 {
@@ -502,13 +551,22 @@ func visibilityRank(r *SearchResult) int {
 
 // calculateRecencyScore computes a recency boost based on entity update time
 // Returns a score between 0.0 (very old) and 1.0 (very recent)
-func calculateRecencyScore(updatedAt time.Time) float64 {
+// calculateRecencyScore scores an entity's age against a caller-supplied
+// reference instant.
+//
+// The instant is a parameter, not time.Now() sampled here, because every result
+// in one query must be scored against the same clock. Sampling per call gave
+// results from different layers — and even from the keyword and vector legs of
+// one search — recency computed microseconds apart, so scores that should have
+// tied differed in their last digits. The ordering then flipped between
+// identical queries, which is how a "deterministic" merge stayed
+// nondeterministic after the map iteration was fixed.
+func calculateRecencyScore(updatedAt, now time.Time) float64 {
 	if updatedAt.IsZero() {
 		return 0.0
 	}
 
 	// Calculate age in days
-	now := time.Now().UTC()
 	age := now.Sub(updatedAt)
 	ageDays := age.Hours() / 24.0
 
