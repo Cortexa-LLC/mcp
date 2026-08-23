@@ -33,8 +33,8 @@ var hubServeCmd = &cobra.Command{
 
 Graphs are seeded with 'kg push' and stored under the data directory.
 Authentication comes from the environment, selected per surface:
-  KG_HUB_READ_AUTH    "token" (default) or "oidc"
-  KG_HUB_SEED_AUTH    "token" (default) or "oidc"
+  KG_HUB_READ_AUTH    "token" (default), "oidc" or "github"
+  KG_HUB_SEED_AUTH    "token" (default), "oidc" or "github"
 
 token mode (shared secrets, the original scheme):
   KG_HUB_READ_TOKEN   bearer token required for reads (unset = open reads)
@@ -43,8 +43,17 @@ token mode (shared secrets, the original scheme):
 oidc mode (per-user identity; clients send an access token from the issuer):
   KG_HUB_OIDC_ISSUER    issuer URL; its discovery document supplies the JWKS
   KG_HUB_OIDC_AUDIENCE  required "aud" claim
-  KG_HUB_SEED_SUBJECTS  comma-separated subjects/emails allowed to push
-                        (unset = any authenticated identity may push)
+
+github mode (per-user identity; clients send a GitHub token with read:org):
+  KG_HUB_GITHUB_ORG    organization the caller must be an active member of
+  KG_HUB_GITHUB_TEAMS  comma-separated team slugs; set = membership of at
+                       least one is also required
+  KG_HUB_GITHUB_API    API base URL for GitHub Enterprise (default
+                       https://api.github.com)
+
+oidc and github modes both honor:
+  KG_HUB_SEED_SUBJECTS  comma-separated subjects/emails/logins allowed to
+                        push (unset = any authenticated identity may push)
 
 Mixing modes is expected during migration: KG_HUB_READ_AUTH=oidc with seeding
 left on the CI seed token is a valid configuration.`,
@@ -87,6 +96,13 @@ var oidcVerifierOnce = sync.OnceValues(func() (*hub.OIDCVerifier, error) {
 		os.Getenv("KG_HUB_OIDC_ISSUER"), os.Getenv("KG_HUB_OIDC_AUDIENCE"))
 })
 
+// githubVerifierOnce likewise shares one instance — and thus one
+// verification cache — across the read and seed surfaces.
+var githubVerifierOnce = sync.OnceValues(func() (*hub.GitHubVerifier, error) {
+	return hub.NewGitHubVerifier(os.Getenv("KG_HUB_GITHUB_API"),
+		os.Getenv("KG_HUB_GITHUB_ORG"), splitCommaList(os.Getenv("KG_HUB_GITHUB_TEAMS")))
+})
+
 // hubVerifier resolves the verifier for one auth surface ("read" or "seed")
 // from the environment. A nil verifier with nil error means the surface's
 // token-mode default: open reads, or seeding disabled.
@@ -95,6 +111,9 @@ func hubVerifier(surface string) (hub.Verifier, string, error) {
 	if surface == "seed" {
 		envMode, envToken = "KG_HUB_SEED_AUTH", "KG_HUB_SEED_TOKEN"
 	}
+
+	var v hub.Verifier
+	var desc string
 	switch mode := os.Getenv(envMode); mode {
 	case "", "token":
 		token := os.Getenv(envToken)
@@ -104,22 +123,31 @@ func hubVerifier(surface string) (hub.Verifier, string, error) {
 			}
 			return nil, "disabled", nil
 		}
+		// The seed-subject allowlist below is meaningless here (every token
+		// caller is the same identity), so token mode returns directly.
 		return hub.NewTokenVerifier(token), "token required", nil
 	case "oidc":
-		v, err := oidcVerifierOnce()
+		ov, err := oidcVerifierOnce()
 		if err != nil {
 			return nil, "", err
 		}
-		desc := fmt.Sprintf("oidc (%s)", v.Issuer())
-		if surface == "seed" {
-			if subjects := splitCommaList(os.Getenv("KG_HUB_SEED_SUBJECTS")); len(subjects) > 0 {
-				return hub.RequireSubjects(v, subjects), fmt.Sprintf("%s, %d allowed subject(s)", desc, len(subjects)), nil
-			}
+		v, desc = ov, fmt.Sprintf("oidc (%s)", ov.Issuer())
+	case "github":
+		gv, err := githubVerifierOnce()
+		if err != nil {
+			return nil, "", err
 		}
-		return v, desc, nil
+		v, desc = gv, fmt.Sprintf("github (org %s)", os.Getenv("KG_HUB_GITHUB_ORG"))
 	default:
-		return nil, "", fmt.Errorf("%s: unknown auth mode %q (want token or oidc)", envMode, mode)
+		return nil, "", fmt.Errorf("%s: unknown auth mode %q (want token, oidc or github)", envMode, mode)
 	}
+
+	if surface == "seed" {
+		if subjects := splitCommaList(os.Getenv("KG_HUB_SEED_SUBJECTS")); len(subjects) > 0 {
+			return hub.RequireSubjects(v, subjects), fmt.Sprintf("%s, %d allowed subject(s)", desc, len(subjects)), nil
+		}
+	}
+	return v, desc, nil
 }
 
 func splitCommaList(s string) []string {

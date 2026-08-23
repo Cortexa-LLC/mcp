@@ -22,13 +22,16 @@ kg hub serve --listen 127.0.0.1:8080 --data /srv/kg    # explicit address and st
 |-----------------|--------|
 | `--listen` | Listen address (default `:7411`) |
 | `--data` | Data directory (default `$KG_HUB_HOME`, else `~/.kg-hub`) |
-| `KG_HUB_READ_AUTH` | Auth scheme for reads: `token` (default) or `oidc` |
-| `KG_HUB_SEED_AUTH` | Auth scheme for `kg push`: `token` (default) or `oidc` |
+| `KG_HUB_READ_AUTH` | Auth scheme for reads: `token` (default), `oidc` or `github` |
+| `KG_HUB_SEED_AUTH` | Auth scheme for `kg push`: `token` (default), `oidc` or `github` |
 | `KG_HUB_READ_TOKEN` | token mode: bearer token required for reads; unset = open reads |
 | `KG_HUB_SEED_TOKEN` | token mode: bearer token required for `kg push`; unset = seeding disabled |
 | `KG_HUB_OIDC_ISSUER` | oidc mode: issuer URL; its discovery document supplies the signing keys |
 | `KG_HUB_OIDC_AUDIENCE` | oidc mode: required `aud` claim |
-| `KG_HUB_SEED_SUBJECTS` | oidc seeding: comma-separated subjects/emails allowed to push; unset = any authenticated identity |
+| `KG_HUB_GITHUB_ORG` | github mode: org the caller must be an active member of |
+| `KG_HUB_GITHUB_TEAMS` | github mode: comma-separated team slugs; set = membership of at least one also required |
+| `KG_HUB_GITHUB_API` | github mode: API base URL for GitHub Enterprise (default `https://api.github.com`) |
+| `KG_HUB_SEED_SUBJECTS` | oidc/github seeding: comma-separated subjects/emails/logins allowed to push; unset = any authenticated identity |
 
 The tokens are shared secrets, a v1 expedient: one token held by everyone cannot be
 revoked per person and cannot tell you who pushed what. Per-user identity over OIDC is
@@ -36,7 +39,10 @@ the agreed direction — see
 [the design doc's Authentication section](kg-shared-service-design.md#authentication) —
 and the hub now supports it: set `KG_HUB_READ_AUTH=oidc` with the issuer and audience
 variables, and readers authenticate with an access token from your IdP instead of a
-shared secret; the pusher's identity is named in the hub's log. The schemes mix per
+shared secret; the pusher's identity is named in the hub's log. For orgs whose identity
+lives on GitHub (which has no OIDC for user sign-in), `KG_HUB_READ_AUTH=github` accepts
+a GitHub token with the `read:org` scope and checks org — and optionally team —
+membership instead. The schemes mix per
 surface, so the expected migration is OIDC reads first while CI keeps pushing with the
 seed token. Treat any token as a credential and store it accordingly rather than
 pasting it into shell history or committed config.
