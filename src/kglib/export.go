@@ -46,8 +46,8 @@ func (s *Store) exportEntities(projectID string, emit func(JournalRecord) error)
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id
-		RETURN e.name, e.type, e.created_at
-		ORDER BY e.name, e.type
+		RETURN e.name, e.type, e.created_at, e.id`+s.visibilityColumn()+`
+		ORDER BY e.name, e.type, e.id
 	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return fmt.Errorf("export entities: %w", err)
@@ -64,11 +64,16 @@ func (s *Store) exportEntities(projectID string, emit func(JournalRecord) error)
 		if err != nil {
 			return fmt.Errorf("export entities: %w", err)
 		}
+		visibility := ""
+		if len(row) > 4 {
+			visibility = stringOrEmpty(row[4])
+		}
 		if err := emit(JournalRecord{
-			Timestamp: timeOrZero(row[2]),
-			Op:        OpCreateEntity,
-			ProjectID: projectID,
-			Entity:    &EntityRef{Name: stringOrEmpty(row[0]), Type: stringOrEmpty(row[1])},
+			Timestamp:  timeOrZero(row[2]),
+			Op:         OpCreateEntity,
+			ProjectID:  projectID,
+			Entity:     newEntityRef(stringOrEmpty(row[3]), stringOrEmpty(row[0]), stringOrEmpty(row[1])),
+			Visibility: visibility,
 		}); err != nil {
 			return err
 		}
@@ -80,8 +85,8 @@ func (s *Store) exportObservations(projectID string, emit func(JournalRecord) er
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
 		WHERE e.project_id = $project_id
-		RETURN e.name, e.type, o.content, o.created_at
-		ORDER BY e.name, e.type, o.created_at, o.content
+		RETURN e.name, e.type, o.content, o.created_at, e.id
+		ORDER BY e.name, e.type, e.id, o.created_at, o.content
 	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return fmt.Errorf("export observations: %w", err)
@@ -102,7 +107,7 @@ func (s *Store) exportObservations(projectID string, emit func(JournalRecord) er
 			Timestamp: timeOrZero(row[3]),
 			Op:        OpCreateObservation,
 			ProjectID: projectID,
-			Entity:    &EntityRef{Name: stringOrEmpty(row[0]), Type: stringOrEmpty(row[1])},
+			Entity:    newEntityRef(stringOrEmpty(row[4]), stringOrEmpty(row[0]), stringOrEmpty(row[1])),
 			Content:   stringOrEmpty(row[2]),
 		}); err != nil {
 			return err
@@ -125,8 +130,8 @@ func (s *Store) exportRelations(projectID string, emit func(JournalRecord) error
 		query := fmt.Sprintf(`
 			MATCH (from:Entity)-[:%s]->(to:Entity)
 			WHERE from.project_id = $project_id AND to.project_id = $project_id
-			RETURN from.name, from.type, to.name, to.type, from.created_at
-			ORDER BY from.name, to.name
+			RETURN from.name, from.type, to.name, to.type, from.created_at, from.id, to.id
+			ORDER BY from.name, from.id, to.name, to.id
 		`, relType)
 
 		result, err := s.QueryParams(query, map[string]any{"project_id": projectID})
@@ -152,8 +157,8 @@ func (s *Store) exportRelations(projectID string, emit func(JournalRecord) error
 				Timestamp: timeOrZero(row[4]),
 				Op:        OpCreateRelation,
 				ProjectID: projectID,
-				From:      &EntityRef{Name: stringOrEmpty(row[0]), Type: stringOrEmpty(row[1])},
-				To:        &EntityRef{Name: stringOrEmpty(row[2]), Type: stringOrEmpty(row[3])},
+				From:      newEntityRef(stringOrEmpty(row[5]), stringOrEmpty(row[0]), stringOrEmpty(row[1])),
+				To:        newEntityRef(stringOrEmpty(row[6]), stringOrEmpty(row[2]), stringOrEmpty(row[3])),
 				RelType:   relType,
 			}); err != nil {
 				result.Close()
