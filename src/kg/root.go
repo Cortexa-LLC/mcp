@@ -24,10 +24,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	// Commands without their own init() registration:
-	rootCmd.AddCommand(exportCmd)
-	rootCmd.AddCommand(gcCmd)
 	rootCmd.AddCommand(embedCmd)
-	rootCmd.AddCommand(graphCmd)
 	rootCmd.AddCommand(perfCmd)
 	rootCmd.AddCommand(personalCmd)
 	rootCmd.AddCommand(versionCmd)

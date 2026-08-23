@@ -169,7 +169,12 @@ func (s *Server) currentDBPath(name string) string {
 
 // --- read handlers ---
 
-func (s *Server) loadRegistryLocked() (*Registry, error) {
+// loadRegistrySnapshot reads the registry, taking s.mu for the duration.
+//
+// Named "snapshot" rather than the Go-conventional "Locked" suffix, which
+// signals that the caller already holds the lock — the opposite of what this
+// does. Callers must NOT hold s.mu: it is a plain Mutex, so doing so deadlocks.
+func (s *Server) loadRegistrySnapshot() (*Registry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return loadRegistry(s.dataDir)
@@ -184,7 +189,7 @@ func internalError(w http.ResponseWriter, what string, err error) {
 }
 
 func (s *Server) handleListGraphs(w http.ResponseWriter, r *http.Request) {
-	reg, err := s.loadRegistryLocked()
+	reg, err := s.loadRegistrySnapshot()
 	if err != nil {
 		internalError(w, "load registry", err)
 		return
@@ -194,7 +199,7 @@ func (s *Server) handleListGraphs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	reg, err := s.loadRegistryLocked()
+	reg, err := s.loadRegistrySnapshot()
 	if err != nil {
 		internalError(w, "load registry", err)
 		return
@@ -265,7 +270,7 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	reg, err := s.loadRegistryLocked()
+	reg, err := s.loadRegistrySnapshot()
 	if err != nil {
 		internalError(w, "load registry", err)
 		return
@@ -393,7 +398,7 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	reg, err := s.loadRegistryLocked()
+	reg, err := s.loadRegistrySnapshot()
 	if err != nil {
 		internalError(w, "load registry", err)
 		return
@@ -509,6 +514,17 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A graph belongs to the repo that first seeded it. Refuse a push from a
+	// different one rather than silently replacing someone else's graph: the
+	// hub namespace is shared, names can be overridden with --graph, and the
+	// failure mode without this is a team quietly losing their knowledge to a
+	// name collision. X-KG-Force is the deliberate override, for the cases
+	// where a repo really has been renamed or moved.
+	if err := s.checkGraphOwnership(name, info.Repo, r.Header.Get("X-KG-Force")); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
 	// Stage (unpack + validate) WITHOUT holding s.mu: the body read is paced by
 	// the network, and holding the lock across it would let one slow push stall
 	// every read handler. Only the install step below needs the lock.
@@ -534,6 +550,34 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 		"commit":  commit,
 		"message": "seeded",
 	})
+}
+
+// checkGraphOwnership reports whether repo may seed the named graph.
+//
+// Permissive in the cases where ownership is genuinely unknown: a graph the
+// registry has never seen, a registry entry recorded before repo was tracked,
+// or a push that declines to say where it came from. Those are all "no evidence
+// of a conflict", and refusing them would break existing deployments to guard
+// against nothing.
+func (s *Server) checkGraphOwnership(name, repo, force string) error {
+	switch force {
+	case "1", "true":
+		return nil
+	}
+
+	reg, err := s.loadRegistrySnapshot()
+	if err != nil {
+		// A registry that cannot be read is a hub problem, not a push problem;
+		// let the seed proceed and fail later if it is going to.
+		return nil
+	}
+	existing, ok := reg.Graphs[name]
+	if !ok || existing.Repo == "" || repo == "" || existing.Repo == repo {
+		return nil
+	}
+	return fmt.Errorf("graph %q was seeded from %s, not %s — "+
+		"pick another name with 'kg push --graph <name>', or resend with X-KG-Force to replace it",
+		name, existing.Repo, repo)
 }
 
 // stage unpacks a pushed archive into a fresh temp dir inside the graph

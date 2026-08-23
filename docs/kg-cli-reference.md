@@ -332,6 +332,40 @@ git HEAD with a warning — re-run `kg index` to stamp them. A database stamped
 
 ---
 
+### Graph naming on a hub
+
+A hub's namespace is shared by every repository that pushes to it, so `kg push`
+derives a name that is unique across them:
+
+| Situation | Graph name |
+|-----------|------------|
+| Repo with no scopes, or its default scope | `<repo>` |
+| Any other named scope | `<repo>.<scope>` |
+
+`<repo>` comes from the git remote's repository name — not the checkout
+directory, which is whatever the person who cloned it chose. Within a GitHub
+organisation repo names are unique by construction, and a hub serves one
+organisation, so that alone is enough; an owner segment would be a constant.
+
+This handles both shapes of repository without configuration. A meta-repo that
+is a single project stays `depop`. A repo split into scopes publishes `depop`
+for its default scope and `depop.checkout` for the rest — and because the
+default scope keeps the bare name, adding a second scope later does not rename
+the graph the first one was already pushing to.
+
+The separator is `.` rather than `/` because a graph name becomes a single
+filesystem path component on the hub; `/` is rejected.
+
+Override per-push with `--graph`, or per-scope with `hubGraph` in the scope
+config — `--graph` names one database, so a monorepo pinning published names
+across `--all-scopes` needs the config field.
+
+The hub refuses a push to a graph another repository seeded, since a name
+collision would otherwise replace their knowledge silently. Resend with
+`X-KG-Force: 1` when a repo genuinely moved.
+
+---
+
 ### `kg hub serve`
 
 Run a shared knowledge hub: an HTTP service hosting read-only knowledge
@@ -472,19 +506,22 @@ from the journal kept beside each database. The previous database is archived as
 
 ---
 
-### Not yet implemented
+### `kg embed`
 
-These commands are registered but are placeholders — they print
-`Not yet implemented` and exit successfully. Do not script against them.
+Backfill vector embeddings for anything in the graph that lacks them.
 
-| Command | Intent |
-|---------|--------|
-| `kg graph` | Write GraphML to stdout |
-| `kg gc` | Remove orphaned nodes, observations, and relations |
-| `kg embed` | Generate and attach vector embeddings as a batch job |
+```bash
+kg embed                   # default scope
+kg embed --scope selling   # a named scope
+kg embed --personal        # the personal knowledge store
+```
 
-Embeddings are still populated during indexing when `OPENAI_API_KEY` or `OLLAMA_HOST` is
-set — only the standalone batch command is missing.
+Indexing embeds as it goes when a provider is configured, so this is for the
+case where one was configured *afterwards*: it embeds only what is missing,
+rather than making you re-index the project to pick embeddings up.
+
+Requires `OPENAI_API_KEY` or `OLLAMA_HOST`, and fails with a non-zero exit if
+neither is set. Without embeddings, search falls back to keyword matching.
 
 ---
 
