@@ -71,6 +71,7 @@ Each scope defines:
 - **name** (required): Scope identifier
 - **database** (required): Database filename (relative to `.ai/`)
 - **layers** (optional): Array of scope names to federate with (read-only)
+- **remotes** (optional): Array of hub graph names to federate with over HTTP (read-only). Requires a `"hub"` URL in `.ai/config.json` — see [kg-shared-service.md](kg-shared-service.md)
 - **include** (optional): Glob patterns to include (default: `["**/*"]`)
 - **exclude** (optional): Glob patterns to exclude
 - **includeModules** (optional): When set, only these `modules/<name>/` directories are indexed. Implicitly excludes all other modules.
@@ -178,7 +179,7 @@ reports both conditions identically. Check that the layer has been indexed
 
 If no scope configs exist in `.ai/scope/`, kg operates in legacy single-DB mode using `.ai/knowledge.db` for everything. This ensures existing projects continue to work without changes.
 
-A scope with no `layers` also skips federation entirely and opens its own database directly — there is nothing to merge.
+A scope with no `layers` and no `remotes` also skips federation entirely and opens its own database directly — there is nothing to merge.
 
 ## How Layers Work
 
@@ -240,3 +241,4 @@ kg search "networking layer"
 - [kg-scopes-implementation.md](kg-scopes-implementation.md) — internals: scope config loading, federated store, priority assignment
 - [../src/kglib/README.md](../src/kglib/README.md#federated-mode) — the library-level `FederatedStore` API, for federating databases that don't come from `.ai/scope/` configs
 - [kg-personal-store.md](kg-personal-store.md) — the personal store, and how `--with-personal` federates it into a project search
+- [kg-shared-service.md](kg-shared-service.md) — the shared knowledge hub, and how `remotes` federate hub graphs into a project search

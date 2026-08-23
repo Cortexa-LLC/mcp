@@ -106,6 +106,120 @@ var hubListCmd = &cobra.Command{
 	},
 }
 
+var (
+	hubStatusHubURL string
+	hubStatusScope  string
+)
+
+var hubStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Compare hub graphs related to this project against local HEAD",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		hubURL, err := resolveHubURL(hubStatusHubURL)
+		if err != nil {
+			return err
+		}
+
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		root := findProjectRoot(cwd)
+		aiDir := filepath.Join(root, ".ai")
+
+		scopeName := hubStatusScope
+		if scopeName == "" {
+			scopeName, _ = knowledge.GetDefaultScope(aiDir)
+		}
+
+		reg, err := hub.ListGraphs(hubURL, os.Getenv("KG_HUB_READ_TOKEN"))
+		if err != nil {
+			return err
+		}
+
+		// Graphs to report: the resolved scope's remotes, every local scope
+		// name the hub also hosts, and (legacy mode) this project's ID.
+		seen := map[string]bool{}
+		var names []string
+		add := func(name string) {
+			if name == "" || seen[name] {
+				return
+			}
+			seen[name] = true
+			if _, ok := reg.Graphs[name]; ok {
+				names = append(names, name)
+			}
+		}
+		if scopeName != "" {
+			scopeCfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
+			if err != nil {
+				// An explicitly requested scope that fails to load is an
+				// error; a broken default scope only loses its remotes.
+				if hubStatusScope != "" {
+					return fmt.Errorf("load scope %s: %w", scopeName, err)
+				}
+			} else {
+				for _, r := range scopeCfg.Remotes {
+					add(r)
+				}
+			}
+		}
+		if scopes, err := knowledge.ListScopeConfigs(aiDir); err == nil {
+			for _, sc := range scopes {
+				add(sc.Name)
+			}
+		}
+		add(projectIDFromCwd(cwd))
+		sort.Strings(names)
+
+		if len(names) == 0 {
+			fmt.Println("No hub graphs relate to this project. Graphs on the hub:")
+			all := make([]string, 0, len(reg.Graphs))
+			for name := range reg.Graphs {
+				all = append(all, name)
+			}
+			sort.Strings(all)
+			for _, name := range all {
+				fmt.Printf("  %s\n", name)
+			}
+			return nil
+		}
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tCOMMIT\tINDEXED\tSTATUS")
+		for _, name := range names {
+			info := reg.Graphs[name]
+			commit := info.Commit
+			if len(commit) > 12 {
+				commit = commit[:12]
+			}
+			if info.Dirty {
+				commit += " (dirty)"
+			}
+			var status string
+			if info.Commit == "" {
+				// rev-list with an empty left side would compare HEAD..HEAD
+				// and misreport "up to date" — an unstamped push is unknown.
+				status = "unknown (graph pushed without a commit)"
+			} else {
+				switch n, err := knowledge.GitAheadCount(root, info.Commit); {
+				case err != nil:
+					status = "not in local history (different repo?)"
+				case n == 0:
+					status = "up to date with local HEAD"
+				default:
+					status = fmt.Sprintf("hub is %d commit(s) behind local HEAD", n)
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+				name, commit,
+				info.IndexedAt.Local().Format("2006-01-02 15:04"),
+				status)
+		}
+		return w.Flush()
+	},
+}
+
 // resolveHubURL returns the hub URL from the flag, falling back to the "hub"
 // key in .ai/config.json.
 func resolveHubURL(flagValue string) (string, error) {
@@ -131,9 +245,13 @@ func init() {
 	rootCmd.AddCommand(hubCmd)
 	hubCmd.AddCommand(hubServeCmd)
 	hubCmd.AddCommand(hubListCmd)
+	hubCmd.AddCommand(hubStatusCmd)
 
 	hubServeCmd.Flags().StringVar(&hubServeListen, "listen", ":7411", "Address to listen on")
 	hubServeCmd.Flags().StringVar(&hubServeData, "data", "", "Data directory (default: $KG_HUB_HOME, else ~/.kg-hub)")
 
 	hubListCmd.Flags().StringVar(&hubListHubURL, "hub", "", "Hub URL (default: \"hub\" key in .ai/config.json)")
+
+	hubStatusCmd.Flags().StringVar(&hubStatusHubURL, "hub", "", "Hub URL (default: \"hub\" key in .ai/config.json)")
+	hubStatusCmd.Flags().StringVar(&hubStatusScope, "scope", "", "Scope whose remotes to report (default: the default scope)")
 }

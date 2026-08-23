@@ -90,7 +90,7 @@ func RunMCPServer(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot
 	useFederation := false
 	if scopeConfig != nil {
 		dbPath = fmt.Sprintf("%s/%s", aiDir, scopeConfig.Database)
-		useFederation = len(scopeConfig.Layers) > 0
+		useFederation = len(scopeConfig.Layers) > 0 || len(scopeConfig.Remotes) > 0
 	} else {
 		dbPath = fmt.Sprintf("%s/knowledge.db", aiDir)
 	}

@@ -28,13 +28,19 @@ const (
 // buildFixtureDB creates a small Kuzu database containing one entity and a
 // provenance stamp. Kuzu opens are ~1s, so callers share one fixture.
 func buildFixtureDB(t *testing.T) string {
+	return buildFixtureDBNamed(t, "AuthService")
+}
+
+// buildFixtureDBNamed is buildFixtureDB with a caller-chosen entity name, for
+// tests that need to tell two graphs' results apart.
+func buildFixtureDBNamed(t *testing.T, entityName string) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "platform.db")
 	store, err := knowledge.OpenStore(dbPath)
 	if err != nil {
 		t.Fatalf("open fixture store: %v", err)
 	}
-	if _, err := store.CreateEntity("AuthService", "function", "monorepo"); err != nil {
+	if _, err := store.CreateEntity(entityName, "function", "monorepo"); err != nil {
 		t.Fatalf("create fixture entity: %v", err)
 	}
 	err = store.SetMeta(kglib.KGMeta{ProjectID: "monorepo", Commit: commitA, IndexedAt: time.Now().UTC()})
@@ -226,6 +232,68 @@ func TestHubPushListSearchPrune(t *testing.T) {
 		sort.Strings(want)
 		if !slices.Equal(commitDirs, want) {
 			t.Errorf("commit dirs after third push = %v, want exactly %v", commitDirs, want)
+		}
+	})
+}
+
+// TestGraphSearchIncludeLayers verifies that include_layers expands a
+// per-graph search to the graph's registered hub-side layers.
+func TestGraphSearchIncludeLayers(t *testing.T) {
+	platformDB := buildFixtureDBNamed(t, "PlatformCore")
+	teamADB := buildFixtureDBNamed(t, "AuthService")
+	ts, _ := newTestHub(t, "", "s3cret", "dev")
+
+	if err := pushFixture(t, ts.URL, "platform", platformDB, commitA, nil); err != nil {
+		t.Fatalf("push platform: %v", err)
+	}
+	if err := pushFixture(t, ts.URL, "team-a", teamADB, commitA, []string{"platform"}); err != nil {
+		t.Fatalf("push team-a: %v", err)
+	}
+
+	type searchOut struct {
+		Graph          string                    `json:"graph"`
+		Results        []*knowledge.SearchResult `json:"results"`
+		LayersSearched []string                  `json:"layers_searched"`
+	}
+	search := func(t *testing.T, body map[string]any) searchOut {
+		t.Helper()
+		resp, raw := postJSON(t, ts.URL+"/v1/graphs/team-a/search", body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("search status = %d, body: %s", resp.StatusCode, raw)
+		}
+		var out searchOut
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("parse search response: %v", err)
+		}
+		return out
+	}
+	countNamed := func(results []*knowledge.SearchResult, name string) int {
+		n := 0
+		for _, r := range results {
+			if r.Entity != nil && r.Entity.Name == name {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("include_layers reaches the layer graph", func(t *testing.T) {
+		out := search(t, map[string]any{"query": "PlatformCore", "include_layers": true})
+		if countNamed(out.Results, "PlatformCore") == 0 {
+			t.Errorf("expected PlatformCore from the platform layer, got %d results", len(out.Results))
+		}
+		if !slices.Equal(out.LayersSearched, []string{"platform"}) {
+			t.Errorf("layers_searched = %v, want [platform]", out.LayersSearched)
+		}
+	})
+
+	t.Run("without include_layers only the graph itself is searched", func(t *testing.T) {
+		out := search(t, map[string]any{"query": "PlatformCore"})
+		if n := countNamed(out.Results, "PlatformCore"); n != 0 {
+			t.Errorf("got %d PlatformCore results without include_layers, want 0", n)
+		}
+		if len(out.LayersSearched) != 0 {
+			t.Errorf("layers_searched = %v, want empty", out.LayersSearched)
 		}
 	})
 }
@@ -501,5 +569,53 @@ func TestSweepStaging(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{commitA}) {
 		t.Errorf("after sweep: %v, want only [%s]", names, commitA)
+	}
+}
+
+// TestIncludeLayersCycleAndDedup pins two expansion behaviors the happy-path
+// test misses: mutually-referential layer registrations must terminate, and a
+// duplicate entity (same ID via the same pushed database) must appear once in
+// the merged results.
+func TestIncludeLayersCycleAndDedup(t *testing.T) {
+	dbPath := buildFixtureDBNamed(t, "CycleEntity")
+	ts, _ := newTestHub(t, "", "s3cret", "dev")
+
+	// a and b are the same database pushed twice, each registered as the
+	// other's layer: a cycle with guaranteed duplicate entity IDs.
+	if err := pushFixture(t, ts.URL, "cyc-a", dbPath, commitA, []string{"cyc-b"}); err != nil {
+		t.Fatalf("push cyc-a: %v", err)
+	}
+	if err := pushFixture(t, ts.URL, "cyc-b", dbPath, commitA, []string{"cyc-a"}); err != nil {
+		t.Fatalf("push cyc-b: %v", err)
+	}
+
+	resp, body := postJSON(t, ts.URL+"/v1/graphs/cyc-a/search",
+		map[string]any{"query": "CycleEntity", "include_layers": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("search status = %d, body: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Results        []*knowledge.SearchResult `json:"results"`
+		LayersSearched []string                  `json:"layers_searched"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	// Expansion terminated (we got an answer at all) and visited cyc-b once.
+	if !slices.Equal(out.LayersSearched, []string{"cyc-b"}) {
+		t.Errorf("layers_searched = %v, want [cyc-b]", out.LayersSearched)
+	}
+	// Same entity ID in both graphs must merge to a single result.
+	seen := map[string]int{}
+	for _, r := range out.Results {
+		seen[r.Entity.ID]++
+	}
+	for id, n := range seen {
+		if n > 1 {
+			t.Errorf("entity %s appears %d times, want deduplicated to 1", id, n)
+		}
+	}
+	if len(out.Results) == 0 {
+		t.Fatal("expected at least one result")
 	}
 }

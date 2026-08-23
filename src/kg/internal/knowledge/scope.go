@@ -21,6 +21,11 @@ type ScopeConfig struct {
 	// Example: ["platform"] means this scope builds on platform knowledge.
 	Layers []string `json:"layers,omitempty"`
 
+	// Remotes are hub graph names to federate into searches (read-only), ranked
+	// above the personal store but below local layers. Requires "hub" in
+	// .ai/config.json. See docs/kg-shared-service.md.
+	Remotes []string `json:"remotes,omitempty"`
+
 	// Include patterns (glob-style, relative to project root). Default: ["**/*"]
 	Include []string `json:"include,omitempty"`
 
