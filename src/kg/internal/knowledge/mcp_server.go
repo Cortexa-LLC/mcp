@@ -281,8 +281,29 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 				if err != nil {
 					return nil, fmt.Errorf("index project: %w", err)
 				}
-				return fmt.Sprintf("Indexed %d files, created %d entities and %d relations in project '%s'",
-					stats.FilesScanned, stats.EntitiesCreated, stats.RelationsCreated, projectID), nil
+
+				// Indexing opens by clearing every row carrying this project ID,
+				// which takes hand-written entities with it — they carry the same
+				// ID. Replaying the journal afterwards is what makes add_entity
+				// durable against index_project, exactly as it does for the CLI.
+				// Without this an agent recording a decision and then re-indexing,
+				// which this tool's own description tells it to do, destroys the
+				// decision and is told the index succeeded.
+				replay, replayErr := s.ReplayJournal(kglib.JournalPath(dbPath))
+
+				msg := fmt.Sprintf("Indexed %d files, created %d entities and %d relations in project '%s'",
+					stats.FilesScanned, stats.EntitiesCreated, stats.RelationsCreated, projectID)
+				switch {
+				case replayErr != nil:
+					// Surfaced rather than swallowed: the hand-written knowledge is
+					// still in the journal, but it is no longer in the graph, and
+					// the caller needs to know the difference.
+					msg += fmt.Sprintf("\n⚠️  Hand-written knowledge could not be restored from the journal: %v\n"+
+						"It remains in %s. Run 'kg index' to retry.", replayErr, kglib.JournalPath(dbPath))
+				case replay.Applied > 0:
+					msg += fmt.Sprintf("\nRestored %d hand-written record(s) from the journal.", replay.Applied)
+				}
+				return msg, nil
 			})
 		},
 	}

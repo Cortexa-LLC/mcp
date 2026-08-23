@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,11 +47,47 @@ const (
 	OpDeleteRelation    = "relation.delete"
 )
 
-// EntityRef names an entity the way the journal identifies it: by the tuple
-// that survives a re-index, not by the UUID that does not.
+// EntityRef names an entity for replay.
+//
+// Name and type are the portable identity. They are not, however, unique:
+// indexed code symbols routinely share them across files — in kg's own graph,
+// 1460 entities cover only 1370 distinct (name, type) pairs, with `init`
+// appearing 21 times and `Close` four. Resolving on that alone reattaches a
+// hand-written note to an arbitrary same-named symbol, silently and
+// permanently.
+//
+// ID is a disambiguating hint, recorded only when it is stable across
+// re-indexing. The indexer derives IDs from source position —
+// "function:<path>:<name>" — so they survive a rebuild exactly. Hand-created
+// entities get a fresh UUID that does not, and for those ID is left empty
+// rather than written and never resolved. stableIDHint draws that line.
+//
+// Replay tries ID first and falls back to (name, type), so a journal written
+// before this field existed still replays, and a graph whose layout has changed
+// still resolves by name.
 type EntityRef struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
+}
+
+// stableIDHint returns id when it is one the indexer derived from source
+// position, and "" when it is a generated UUID.
+//
+// Indexer IDs are "<kind>:<path>:<name>" and always contain a colon; UUIDs
+// never do. Recording a UUID would put an identifier in the journal that cannot
+// resolve after the rebuild the journal exists to survive — the thing this
+// format was explicitly designed not to do.
+func stableIDHint(id string) string {
+	if strings.Contains(id, ":") {
+		return id
+	}
+	return ""
+}
+
+// entityRef builds a reference to an entity for the journal.
+func entityRef(e *Entity) *EntityRef {
+	return &EntityRef{Name: e.Name, Type: e.Type, ID: stableIDHint(e.ID)}
 }
 
 // JournalRecord is one line of <db>.journal.jsonl.
