@@ -120,6 +120,19 @@ kg search "retention" --personal              # personal store only
 kg search "retention" --with-personal         # project graph + personal, personal ranked lower
 ```
 
+Unexported symbols are indexed and searchable. They rank below equally-relevant
+exported ones and are marked `(unexported)` in the output. `--public-only` hides
+them, which is what you want when you are reading a package's API surface rather
+than looking for a specific function:
+
+```bash
+kg search "handler"                # everything, exported first
+kg search "handler" --public-only  # only the exported API surface
+```
+
+See [Symbol visibility](#symbol-visibility) for why unexported symbols are
+indexed at all.
+
 ---
 
 ### `kg stats`
@@ -584,6 +597,44 @@ RETURN e.name, o.content LIMIT 20
 -- Entities with no inbound relations (potential orphans)
 MATCH (e) WHERE NOT ()-[]->(e) RETURN e.name, e.type LIMIT 20
 ```
+
+---
+
+## Symbol visibility
+
+Code symbols carry a `visibility` — `public` or `private` — recorded at index
+time from the language's own convention: capitalisation in Go, a leading
+underscore in Python. Search uses it as a **tie-break, not a filter**: unexported
+symbols are indexed and findable, they just sort below equally-relevant exported
+ones.
+
+That is a deliberate reversal. kg used to index exported symbols only, which is
+defensible for a library — the exported set is the API surface, and the rest is
+noise. It is wrong for a command layer. In a `package main`, *nothing* can be
+exported, because nothing can import it. kg's own CLI was 73% invisible to kg.
+
+Three values, and the third matters:
+
+| Value | Meaning |
+|-------|---------|
+| `public` | Exported in its language's terms |
+| `private` | Not exported — indexed, ranked lower, marked `(unexported)` |
+| *empty* | No such concept, or not yet known |
+
+Empty is **not** private. It covers files, markdown topics and Makefile targets,
+which have no visibility; hand-written entities from `kg add` and the MCP tools,
+which are not source symbols at all; and rows written before the column existed.
+Search ranks empty alongside `public`, because hand-written knowledge is the last
+thing that should sink below an exported getter.
+
+Existing graphs pick the column up on their next write-mode open, and fill it on
+the next `kg index`. Read-only opens never migrate, so kg checks whether a graph
+actually has the column before querying it — a graph that has not been re-indexed
+keeps working, it simply reports empty visibility for everything.
+
+`--public-only` on `kg search`, and `public_only` on the `search_knowledge` MCP
+tool, filter to the exported surface. Both keep empty-visibility entities: they
+have no API surface to be outside of.
 
 ---
 
