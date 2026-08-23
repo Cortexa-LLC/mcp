@@ -27,8 +27,14 @@ build: ## Build the kg binary
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(OUT) .
 	@echo "✅ Built: $(OUT)"
 
+# install keeps the binary it replaces. Kuzu pins its storage format to the
+# library version, so a database written before a go-kuzu bump may only be
+# readable by the build that wrote it. Retention is delegated to install.py
+# rather than reimplemented here, so the curl path and the make path cannot
+# drift; it is best-effort, and never blocks the install.
 install: build ## Build and install kg to $(INSTALL_DIR)
 	@mkdir -p $(INSTALL_DIR)
+	@python3 ../../install.py --retain-only $(INSTALL_DIR)/$(BIN_NAME) 2>/dev/null || true
 	@install -m 755 $(OUT) $(INSTALL_DIR)/$(BIN_NAME)
 	@echo "✅ Installed: $(INSTALL_DIR)/$(BIN_NAME)"
 	@echo ""

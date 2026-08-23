@@ -182,15 +182,25 @@ def build_mcp(name: str, cfg: dict) -> Path:
     info(f"Built: {built}")
     return built
 
-# How many superseded binaries to keep. One is all the migration path needs —
-# the immediately-outgoing build — but these are ~45 MB each, so the cap stays
-# tight rather than growing an archive nobody asked for.
+# How many superseded binaries to keep beside the current one. One is all the
+# migration path needs — the immediately-outgoing build — but these are ~45 MB
+# each and they sit in /usr/local/bin, so the cap stays tight.
 RETAINED_BINARIES = 2
 
-def kg_home() -> Path:
-    """The kg home directory, matching the KG_HOME override the binary honours."""
-    override = os.environ.get("KG_HOME")
-    return Path(override) if override else Path.home() / ".kg"
+def retained_name(dest: Path, version: str) -> Path:
+    """Where the outgoing copy of dest goes: beside it, under a marked name.
+
+    Retained binaries live in the install directory rather than a private one,
+    so they are on PATH and can simply be run. That also sidesteps a trap: under
+    `sudo make install`, Path.home() is root's home, and a retained binary filed
+    under /var/root/.kg is one the user will never find.
+
+    The ".old-" marker mirrors how archived databases are named, and matters
+    more here than it looks. Pruning globs this pattern, and it globs inside a
+    shared directory — a looser pattern like "kg-*" could match an unrelated
+    command someone installed and delete it.
+    """
+    return dest.with_name(f"{dest.name}.old-{version}")
 
 def binary_version(binary: Path) -> str:
     """Best-effort version of an installed binary, for naming the retained copy."""
@@ -221,9 +231,9 @@ def retain_previous(dest: Path) -> Path | None:
     if not dest.exists():
         return None
 
-    outdir = kg_home() / "bin"
-    outdir.mkdir(parents=True, exist_ok=True)
-    kept = outdir / f"{dest.name}-{binary_version(dest)}"
+    kept = retained_name(dest, binary_version(dest))
+    if kept == dest:
+        return None
 
     if not kept.exists():
         try:
@@ -231,19 +241,23 @@ def retain_previous(dest: Path) -> Path | None:
             if not IS_WINDOWS:
                 kept.chmod(0o755)
         except OSError as e:
-            # Retention is insurance, not a prerequisite. A full disk should not
-            # be able to block an upgrade.
+            # Retention is insurance, not a prerequisite. A full disk, or a
+            # directory this process cannot write, should not block an upgrade.
             warn(f"Could not retain the previous {dest.name}: {e}")
             return None
 
-    prune_retained(outdir, dest.name)
+    prune_retained(dest)
     return kept
 
-def prune_retained(outdir: Path, prefix: str) -> None:
-    """Drop all but the most recent RETAINED_BINARIES copies of one binary."""
+def prune_retained(dest: Path) -> None:
+    """Drop all but the most recent RETAINED_BINARIES copies of one binary.
+
+    The glob is deliberately narrow. This runs in a shared directory, usually
+    /usr/local/bin, and anything it matches it deletes.
+    """
     try:
         kept = sorted(
-            (p for p in outdir.glob(f"{prefix}-*") if p.is_file()),
+            (p for p in dest.parent.glob(f"{dest.name}.old-*") if p.is_file()),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -340,6 +354,15 @@ def main() -> None:
         help="Install Tesseract OCR engine (used by markitdown)",
     )
     parser.add_argument(
+        "--retain-only",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="Retain the binary already at PATH and exit, installing nothing. "
+             "Used by the Makefiles so `make install` gets the same safety net "
+             "as this script rather than a second copy of the logic.",
+    )
+    parser.add_argument(
         "--prefix",
         metavar="DIR",
         type=Path,
@@ -347,6 +370,12 @@ def main() -> None:
         help=f"Install binaries to DIR (default: {install_dir})",
     )
     args = parser.parse_args()
+
+    if args.retain_only:
+        kept = retain_previous(args.retain_only)
+        if kept:
+            info(f"Previous build kept at {kept}")
+        return
 
     if args.list:
         print("Available MCPs:")

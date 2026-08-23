@@ -455,10 +455,21 @@ Three distinct migration concerns, with different answers:
      `(name, type, project)` and re-resolve at replay, not by raw UUID. Compaction
      (rewriting the journal as a current-state dump) rides along with `kg export`.
   3. **Transition-generation safety net.** Databases created before journaling shipped
-     have nothing to replay. For that one boundary, `install.py` retains the outgoing
-     binary at `~/.kg/bin/kg-<oldver>` (honouring `KG_HOME`, capped at the two most
-     recent — they are ~45 MB each), so a database only that build can read is still
-     reachable. Vestigial once journaling has shipped everywhere.
+     have nothing to replay. For that one boundary, installing retains the outgoing
+     binary beside the new one as `<install-dir>/kg.old-<version>` — usually
+     `/usr/local/bin` — so it stays on `PATH` and can simply be run. Capped at the two
+     most recent, since they are ~45 MB each.
+
+     Retention lives in `install.py`, and `make install` shells out to it
+     (`--retain-only`) rather than carrying a second copy, because the two install
+     paths drifting is exactly how a safety net stops being one. It is best-effort:
+     a directory the installer cannot write warns rather than blocking the upgrade.
+
+     The `.old-` marker is not decoration. Pruning globs `kg.old-*` in a shared
+     directory and deletes what it matches; a looser pattern like `kg-*` could take
+     an unrelated command with it.
+
+     Vestigial once journaling has shipped everywhere.
 
   The hub migrates itself: CI re-pushes after upgrading, the seed version gate keeps
   mixed-format snapshots out, and the registry's `kgVersion` names any graph still
