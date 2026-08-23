@@ -313,16 +313,45 @@ Three distinct migration concerns, with different answers:
 - **Provenance backfill (handled).** Pre-existing databases gain their stamp on the next
   `kg index`; until then `kg push` falls back to current HEAD with a warning. The stamp's
   `KGVersion` field means every database self-reports which kg wrote it.
-- **Kuzu storage-format upgrades (designed, not yet built — automate fully).** go-kuzu
+- **Kuzu storage-format upgrades (built — Phase 4).** go-kuzu
   pins the storage engine; a future bump can make old `.db` files unopenable. Users who
-  have adopted kg must never face manual breakage, so the plan is zero-action
+  have adopted kg must never face manual breakage, so the mechanism is zero-action
   migration, split by data kind:
 
+  0. **Detecting a format change — a sidecar version stamp, not the open error.**
+     The original plan here was to react to "a format-mismatch open error". No such
+     error is observable: go-kuzu's `OpenDatabase` discards the engine's diagnostic
+     and returns only `failed to open database with status %d`, so a format mismatch,
+     a held lock, a missing file, and a corrupt database are indistinguishable. (This
+     is also why opening a nonexistent database used to report it as locked by another
+     process.) The C API exposes `kuzu_get_storage_version()`; go-kuzu ships no binding
+     for it.
+
+     Detection therefore happens *before* the open, against a sidecar
+     `<db>.format.json` recording the pinned go-kuzu module version, read at runtime
+     with `debug.ReadBuildInfo()`. The stamp lives outside the database because its
+     whole job is to be readable when the database is not. Written on every
+     write-mode open, which proves by construction that the running engine can read
+     the format. Databases predating the stamp report `FormatUnstamped` and are
+     deliberately left alone — rebuilding every pre-existing graph on sight would be
+     the forced breakage this exists to prevent; that generation is what the retained
+     binary below covers.
+
   1. **Indexed data — auto-rebuild.** Project graphs are derivable from source. On a
-     format-mismatch open error, the new binary moves the database aside
+     detected mismatch the new binary moves the database aside
      (`knowledge.db.old-<version>`) and re-indexes automatically; the user sees a
      slower first run, not an error. The `KGMeta` stamp tells the new binary what the
      old graph reflected.
+
+     **Ordering, which is load-bearing:** `Indexer.Index` opens by calling
+     `clearProjectData`, which deletes every row carrying the project ID — hand-written
+     ones included, since they share it. Journal replay must therefore run *after*
+     indexing. Replaying first puts the journal's contents exactly where the clear step
+     is about to erase them.
+
+     This also repairs a pre-existing data-loss bug: before Phase 4, `kg add entity`
+     followed by `kg index` silently destroyed the entity. `kg index` now replays the
+     journal on every run, not only after a migration.
   2. **Hand-written knowledge — a logical write journal.** Every hand-write (`kg add
      entity/observation/link`, the MCP `add_entity` / `add_observation` /
      `link_entities` tools, and all personal-store writes) also appends one JSON line
@@ -335,9 +364,9 @@ Three distinct migration concerns, with different answers:
      (rewriting the journal as a current-state dump) rides along with `kg export`.
   3. **Transition-generation safety net.** Databases created before journaling shipped
      have nothing to replay. For that one boundary, `install.py` retains the outgoing
-     binary (e.g. `~/.kg/bin/kg-<oldver>`) and auto-migration shells out to it for an
-     export — Kuzu's native `EXPORT DATABASE` / `IMPORT DATABASE` exists for exactly
-     this. Vestigial once journaling has shipped.
+     binary at `~/.kg/bin/kg-<oldver>` (honouring `KG_HOME`, capped at the two most
+     recent — they are ~45 MB each), so a database only that build can read is still
+     reachable. Vestigial once journaling has shipped everywhere.
 
   The hub migrates itself: CI re-pushes after upgrading, the seed version gate keeps
   mixed-format snapshots out, and the registry's `kgVersion` names any graph still
@@ -359,10 +388,10 @@ Three distinct migration concerns, with different answers:
    Integration test: seed two layered graphs from a scope config, search over HTTP.
 3. **Client:** `RemoteLayer`, `remotes` in scope config, `kg hub status`. User-facing
    doc (`kg-shared-service.md`) + cross-links from kg-scopes.md and README.
-4. **Durability (must land before any Kuzu bump):** the hand-write journal +
-   format-mismatch auto-rebuild/replay, `kg export`/`kg import` (JSONL round-trip;
-   doubles as journal compaction and personal-store backup), and installer retention
-   of the outgoing binary — see "Migrating existing databases".
+4. **Durability (shipped):** the hand-write journal + format-mismatch
+   auto-rebuild/replay, `kg export`/`kg import` (JSONL round-trip; doubles as journal
+   compaction and personal-store backup), `kg migrate`, and installer retention of the
+   outgoing binary — see "Migrating existing databases".
 5. **Later:** incremental reseed; hub-side query embedding; `Source` field on
    `SearchResult` for provenance display; per-graph tokens; offline read cache if a
    team wants search on planes.

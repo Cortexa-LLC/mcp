@@ -79,12 +79,7 @@ func openStoreWithConfig(dbPath string, readOnly bool, cfg *SchemaConfig) (*Stor
 	// Open database
 	db, err := kuzu.OpenDatabase(dbPath, kuzuCfg)
 	if err != nil {
-		// "status 1" is Kuzu's lock-acquisition failure — give a human-readable hint
-		if strings.Contains(err.Error(), "status 1") {
-			return nil, fmt.Errorf("knowledge graph database is locked by another process "+
-				"(is indexing running?): %w", err)
-		}
-		return nil, fmt.Errorf("open kuzu database: %w", err)
+		return nil, openDiagnostic(dbPath, readOnly, err)
 	}
 
 	// Create connection
@@ -108,9 +103,62 @@ func openStoreWithConfig(dbPath string, readOnly bool, cfg *SchemaConfig) (*Stor
 			store.Close()
 			return nil, fmt.Errorf("initialize schema: %w", err)
 		}
+
+		// Record which engine build wrote this database. Reaching this point
+		// proves the running engine can read the format, so the stamp is
+		// truthful by construction. It is a sidecar rather than a row in the
+		// database because its whole job is to be readable when the database is
+		// not. A failure to stamp is not fatal — the database is fine, it just
+		// falls back to the unstamped path on a later version check.
+		_ = WriteFormatStamp(dbPath, buildVersion)
 	}
 
 	return store, nil
+}
+
+// buildVersion is the kg version recorded in format stamps for diagnostics.
+// Set by the kg binary through SetBuildVersion; empty in library use.
+var buildVersion string
+
+// SetBuildVersion tells kglib which kg build is running, for provenance
+// recorded in format stamps.
+func SetBuildVersion(v string) { buildVersion = v }
+
+// openDiagnostic turns go-kuzu's opaque open failure into something actionable.
+//
+// go-kuzu reports every failure as "failed to open database with status N",
+// having discarded the engine's own message, so a missing database, a held
+// lock, and a storage-format mismatch are indistinguishable from the error
+// alone. The previous version of this code assumed a lock, which is why opening
+// a database that did not exist reported it as locked by another process.
+//
+// What can be determined without the engine is checked directly: whether the
+// file is there, and what the format sidecar says wrote it.
+func openDiagnostic(dbPath string, readOnly bool, err error) error {
+	status, stamp, checkErr := CheckFormat(dbPath)
+	if checkErr == nil {
+		switch status {
+		case FormatMissing:
+			if readOnly {
+				// Read-only opens cannot create a database, so this is the whole
+				// explanation rather than a symptom of something else.
+				return fmt.Errorf("no knowledge graph database at %s "+
+					"(create one with 'kg index'): %w", dbPath, err)
+			}
+		case FormatMismatch:
+			return fmt.Errorf("knowledge graph database at %s was written by kuzu %s "+
+				"but this build uses %s; it needs rebuilding "+
+				"(run 'kg index' to rebuild it, or 'kg migrate' to rebuild every graph): %w",
+				dbPath, stamp.KuzuVersion, KuzuVersion(), err)
+		}
+	}
+
+	if strings.Contains(err.Error(), "status 1") {
+		return fmt.Errorf("could not open the knowledge graph database at %s — "+
+			"it is most likely locked by another process (is indexing running?), "+
+			"but a corrupt database reports the same way: %w", dbPath, err)
+	}
+	return fmt.Errorf("open kuzu database: %w", err)
 }
 
 // Close closes the database connection.
