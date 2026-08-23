@@ -77,6 +77,18 @@ func (fs *FederatedStore) Close() error {
 	return firstErr
 }
 
+// LayerNames returns the names of the layers this store federates, in priority
+// order. For diagnostics and for tests that need to assert which layers were
+// actually built — notably that no remote layer was created against a hub the
+// user did not trust.
+func (fs *FederatedStore) LayerNames() []string {
+	names := make([]string, 0, len(fs.layers))
+	for _, l := range fs.layers {
+		names = append(names, l.name)
+	}
+	return names
+}
+
 // PrimaryStore returns the primary (highest priority) layer's local store for
 // write operations, or nil if there are no layers or the primary layer is not
 // a local *Store. Remote layers are read-only by design and are never the

