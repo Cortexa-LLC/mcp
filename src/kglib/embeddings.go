@@ -25,6 +25,16 @@ func (s *Store) BatchEmbed(ctx context.Context, projectID string, embedder Embed
 		if err != nil {
 			return fmt.Errorf("generate embeddings: %w", err)
 		}
+		// Embed talks to an external service (or any third-party Embedder
+		// implementation), so the returned slice is untrusted input, not a
+		// language-level guarantee. A short response used to be an
+		// index-out-of-range panic in the loop below -- a remote party crashing
+		// the process. Length is the whole contract here: embeddings[i] is only
+		// the vector for entities[i] if the two line up positionally.
+		if len(embeddings) != len(texts) {
+			return fmt.Errorf("embedder returned %d embeddings for %d entities: "+
+				"results are matched by position, so a mismatched count cannot be used", len(embeddings), len(texts))
+		}
 
 		// Store embeddings
 		for i, entity := range entities {
@@ -54,6 +64,10 @@ func (s *Store) BatchEmbed(ctx context.Context, projectID string, embedder Embed
 	obsEmbeddings, err := embedder.Embed(ctx, obsTexts)
 	if err != nil {
 		return fmt.Errorf("generate observation embeddings: %w", err)
+	}
+	if len(obsEmbeddings) != len(obsTexts) {
+		return fmt.Errorf("embedder returned %d embeddings for %d observations: "+
+			"results are matched by position, so a mismatched count cannot be used", len(obsEmbeddings), len(obsTexts))
 	}
 
 	// Store observation embeddings
@@ -90,11 +104,14 @@ func (s *Store) GetUnembeddedEntities(projectID string) ([]Entity, error) {
 		typ, _ := row.GetValue(2)
 		projID, _ := row.GetValue(3)
 
+		// GetValue already swallows its own error into the discarded second
+		// return, so these values can be nil; a bare .(string) would panic on the
+		// first NULL column instead of yielding an empty string.
 		entity := Entity{
-			ID:        id.(string),
-			Name:      name.(string),
-			Type:      typ.(string),
-			ProjectID: projID.(string),
+			ID:        stringOrEmpty(id),
+			Name:      stringOrEmpty(name),
+			Type:      stringOrEmpty(typ),
+			ProjectID: stringOrEmpty(projID),
 		}
 		entities = append(entities, entity)
 	}
@@ -126,9 +143,9 @@ func (s *Store) GetUnembeddedObservations(projectID string) ([]Observation, erro
 		content, _ := row.GetValue(2)
 
 		obs := Observation{
-			ID:       id.(string),
-			EntityID: entityID.(string),
-			Content:  content.(string),
+			ID:       stringOrEmpty(id),
+			EntityID: stringOrEmpty(entityID),
+			Content:  stringOrEmpty(content),
 		}
 		observations = append(observations, obs)
 	}

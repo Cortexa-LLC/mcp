@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -44,8 +45,51 @@ type ScopeConfig struct {
 	IncludeModules []string `json:"includeModules,omitempty"`
 }
 
+// scopeComponentRE constrains every name that becomes a single filesystem path
+// component. It deliberately mirrors the hub's graphNameRE (internal/hub), because
+// scope names, layer names and remote graph names are joined into paths and into
+// hub request URLs by the same rules.
+var scopeComponentRE = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
+
+// validScopeComponent reports whether name is safe to join into a path as a single
+// component. The regex alone admits "." and ".." -- path navigation, not names --
+// so they are rejected explicitly.
+func validScopeComponent(name string) bool {
+	return scopeComponentRE.MatchString(name) && name != "." && name != ".."
+}
+
+// checkScopeComponent wraps validScopeComponent with an error that names the field,
+// so a rejected config says which key in which file is at fault.
+func checkScopeComponent(field, value, path string) error {
+	if !validScopeComponent(value) {
+		return fmt.Errorf("scope config %s: %s %q is not a valid name: expected 1-64 characters "+
+			"from [a-zA-Z0-9._-] and not \".\" or \"..\" (it is joined into a filesystem path, "+
+			"so path separators and parent-directory references are refused)", path, field, value)
+	}
+	return nil
+}
+
 // LoadScopeConfig reads a scope config from .ai/scope/<name>.json
+//
+// Everything here is attacker-controlled in the threat model that matters: `kg
+// index` is run against repositories that were merely cloned, and .ai/scope/*.json
+// ships inside the repository. Database, Layers and Remotes are all joined into
+// filesystem paths (or hub URLs) by roughly a dozen call sites across the CLI and
+// the MCP server, and scopeName is joined into this function's own read path.
+//
+// A config saying {"database": "../../../../home/user/.ssh/config"} would otherwise
+// make `kg index` create a Kuzu database over that file, and ArchiveDatabase would
+// os.Rename files there during a storage-format migration. So validation lives here,
+// at the single point every one of those call sites passes through, rather than
+// being re-derived correctly at each of them.
 func LoadScopeConfig(aiDir, scopeName string) (*ScopeConfig, error) {
+	// Validate before the name reaches filepath.Join: this is also the arbitrary-read
+	// half of the problem, since scopeName arrives from the --scope flag and from
+	// layer names inside repo-supplied config.
+	if err := checkScopeComponent("scope name", scopeName, filepath.Join(aiDir, "scope")); err != nil {
+		return nil, err
+	}
+
 	path := filepath.Join(aiDir, "scope", scopeName+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -63,6 +107,32 @@ func LoadScopeConfig(aiDir, scopeName string) (*ScopeConfig, error) {
 	}
 	if cfg.Database == "" {
 		return nil, fmt.Errorf("scope config %s missing required field: database", path)
+	}
+
+	// Database is a bare filename with an extension ("platform.db"), never a path.
+	if err := checkScopeComponent("database", cfg.Database, path); err != nil {
+		return nil, err
+	}
+	if err := checkScopeComponent("name", cfg.Name, path); err != nil {
+		return nil, err
+	}
+	if cfg.HubGraph != "" {
+		if err := checkScopeComponent("hubGraph", cfg.HubGraph, path); err != nil {
+			return nil, err
+		}
+	}
+	for _, layer := range cfg.Layers {
+		// Layers are scope names; each one is fed back into LoadScopeConfig and
+		// joined into a database path by federated.go.
+		if err := checkScopeComponent("layer", layer, path); err != nil {
+			return nil, err
+		}
+	}
+	for _, remote := range cfg.Remotes {
+		// Remotes are hub graph names; they become path segments of a hub request.
+		if err := checkScopeComponent("remote", remote, path); err != nil {
+			return nil, err
+		}
 	}
 
 	// Apply defaults
