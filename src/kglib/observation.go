@@ -12,8 +12,9 @@ import (
 // Cypher statement so the write is atomic – there is no window where an
 // orphaned Observation node can exist if the relationship step fails.
 func (s *Store) CreateObservation(entityID, content, projectID string) (*Observation, error) {
-	// Verify entity exists and belongs to this project
-	_, err := s.GetEntity(entityID, projectID)
+	// Verify entity exists and belongs to this project. The entity is kept
+	// because the journal names its parent by (name, type), not by UUID.
+	entity, err := s.GetEntity(entityID, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("entity: %w", err)
 	}
@@ -49,6 +50,15 @@ func (s *Store) CreateObservation(entityID, content, projectID string) (*Observa
 		return nil, fmt.Errorf("create observation: %w", err)
 	}
 	result.Close()
+
+	if err := s.appendJournal(JournalRecord{
+		Op:        OpCreateObservation,
+		ProjectID: projectID,
+		Entity:    &EntityRef{Name: entity.Name, Type: entity.Type},
+		Content:   content,
+	}); err != nil {
+		return obs, errJournalNote(err)
+	}
 
 	return obs, nil
 }
@@ -101,9 +111,27 @@ func (s *Store) GetObservations(entityID, projectID string) ([]*Observation, err
 // DeleteObservation removes an observation
 func (s *Store) DeleteObservation(obsID, entityID, projectID string) error {
 	// Verify entity exists and belongs to this project
-	_, err := s.GetEntity(entityID, projectID)
+	entity, err := s.GetEntity(entityID, projectID)
 	if err != nil {
 		return err
+	}
+
+	// Observations have no name — the journal identifies one by its content and
+	// parent, so the content has to be read before the node goes away. Only
+	// needed when journaling is on; deletes are rare enough that the extra read
+	// costs nothing worth optimising.
+	var deletedContent string
+	if s.JournalEnabled() {
+		existing, err := s.GetObservations(entityID, projectID)
+		if err != nil {
+			return fmt.Errorf("read observation before delete: %w", err)
+		}
+		for _, o := range existing {
+			if o.ID == obsID {
+				deletedContent = o.Content
+				break
+			}
+		}
 	}
 
 	result, err := s.QueryParams(`
@@ -115,6 +143,15 @@ func (s *Store) DeleteObservation(obsID, entityID, projectID string) error {
 		return fmt.Errorf("delete observation: %w", err)
 	}
 	defer result.Close()
+
+	if err := s.appendJournal(JournalRecord{
+		Op:        OpDeleteObservation,
+		ProjectID: projectID,
+		Entity:    &EntityRef{Name: entity.Name, Type: entity.Type},
+		Content:   deletedContent,
+	}); err != nil {
+		return errJournalNote(err)
+	}
 
 	return nil
 }

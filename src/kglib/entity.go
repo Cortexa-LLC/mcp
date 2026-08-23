@@ -40,6 +40,14 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 	}
 	defer result.Close()
 
+	if err := s.appendJournal(JournalRecord{
+		Op:        OpCreateEntity,
+		ProjectID: projectID,
+		Entity:    &EntityRef{Name: name, Type: entityType},
+	}); err != nil {
+		return entity, errJournalNote(err)
+	}
+
 	return entity, nil
 }
 
@@ -123,6 +131,48 @@ func (s *Store) GetEntityByName(name, projectID string) (*Entity, error) {
 	return entity, nil
 }
 
+// GetEntityByNameAndType retrieves an entity by the tuple the journal and the
+// export format use to identify it. Name alone is not unique — an indexed graph
+// can hold a file and a topic of the same name — so replay and import resolve
+// on both. Returns (nil, nil) when there is no match.
+func (s *Store) GetEntityByNameAndType(name, entityType, projectID string) (*Entity, error) {
+	result, err := s.QueryParams(`
+		MATCH (e:Entity)
+		WHERE e.name = $name AND e.type = $type AND e.project_id = $project_id
+		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		LIMIT 1
+	`, map[string]any{"name": name, "type": entityType, "project_id": projectID})
+	if err != nil {
+		return nil, fmt.Errorf("query entity by name and type: %w", err)
+	}
+	defer result.Close()
+
+	if !result.HasNext() {
+		return nil, nil
+	}
+
+	tuple, err := result.Next()
+	if err != nil {
+		return nil, fmt.Errorf("get next: %w", err)
+	}
+	defer tuple.Close()
+
+	row, err := tuple.GetAsSlice()
+	if err != nil {
+		return nil, fmt.Errorf("get row: %w", err)
+	}
+
+	entity := &Entity{
+		ID:        stringOrEmpty(row[0]),
+		Name:      stringOrEmpty(row[1]),
+		Type:      stringOrEmpty(row[2]),
+		ProjectID: stringOrEmpty(row[3]),
+	}
+	entity.CreatedAt = timeOrZero(row[4])
+	entity.UpdatedAt = timeOrZero(row[5])
+	return entity, nil
+}
+
 // ListEntities retrieves all entities for a project, optionally filtered by type
 func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 	stmt := `
@@ -177,8 +227,10 @@ func (s *Store) ListEntities(projectID, entityType string) ([]*Entity, error) {
 
 // DeleteEntity removes an entity and all its relations
 func (s *Store) DeleteEntity(id, projectID string) error {
-	// First verify the entity exists and belongs to this project
-	_, err := s.GetEntity(id, projectID)
+	// First verify the entity exists and belongs to this project.
+	// The entity is kept rather than discarded: the journal identifies it by
+	// name and type, which are unreadable once the node is gone.
+	entity, err := s.GetEntity(id, projectID)
 	if err != nil {
 		return err
 	}
@@ -192,6 +244,14 @@ func (s *Store) DeleteEntity(id, projectID string) error {
 		return fmt.Errorf("delete entity: %w", err)
 	}
 	defer result.Close()
+
+	if err := s.appendJournal(JournalRecord{
+		Op:        OpDeleteEntity,
+		ProjectID: projectID,
+		Entity:    &EntityRef{Name: entity.Name, Type: entity.Type},
+	}); err != nil {
+		return errJournalNote(err)
+	}
 
 	return nil
 }

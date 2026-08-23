@@ -154,6 +154,11 @@ func personalTools(cfg PersonalConfig) ([]mcp.Tool, map[string]mcp.ToolHandler) 
 		}
 		defer store.Close()
 
+		// The personal store is hand-written knowledge end to end — nothing in it
+		// is derived from a repository — so every entry is journaled for replay
+		// after a storage-format upgrade.
+		store.EnableJournal()
+
 		entity, err := store.CreateEntity(title, entityType, cfg.ProjectID)
 		if err != nil {
 			return nil, fmt.Errorf("create personal entity: %w", err)

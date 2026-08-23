@@ -31,6 +31,7 @@ type Store struct {
 	path            string
 	hnswIdx         *vectorIndexCache // per-project lazy HNSW index
 	allowedRelTypes []string          // configured relation types for validation
+	journal         *Journal          // hand-write journal; nil unless EnableJournal was called
 }
 
 // OpenStore opens or creates a Kuzu database in read-write mode with the given schema configuration.
