@@ -25,6 +25,13 @@ kg hub serve --listen 127.0.0.1:8080 --data /srv/kg    # explicit address and st
 | `KG_HUB_READ_TOKEN` | Bearer token required for reads; unset = open reads |
 | `KG_HUB_SEED_TOKEN` | Bearer token required for `kg push`; unset = seeding disabled |
 
+Both are shared secrets, which is a v1 expedient rather than the intended end state: one
+token held by everyone cannot be revoked per person and cannot tell you who pushed what.
+Per-user identity over OIDC is the agreed direction — see
+[the design doc's Authentication section](kg-shared-service-design.md#authentication).
+Treat these as credentials in the meantime and store them accordingly rather than
+pasting them into shell history or committed config.
+
 Or in a container (build from the repo's `src/` directory):
 
 ```bash
