@@ -70,7 +70,7 @@ Examples:
 }
 
 func pushScopeDB(root, aiDir, hubURL, seedToken, projectID, scopeName string) error {
-	var dbPath, graph string
+	var dbPath string
 	var layers []string
 	if scopeName != "" {
 		cfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
@@ -78,12 +78,16 @@ func pushScopeDB(root, aiDir, hubURL, seedToken, projectID, scopeName string) er
 			return err
 		}
 		dbPath = filepath.Join(aiDir, cfg.Database)
-		graph = cfg.Name
 		layers = cfg.Layers
 	} else {
 		dbPath = filepath.Join(aiDir, "knowledge.db")
-		graph = projectID
 	}
+
+	// A hub's namespace is shared by every repo pushing to it. The scope's own
+	// name is not unique there — two repos with a `platform` scope collided
+	// silently, last push winning — so the name is derived from the repo. See
+	// graphname.go.
+	graph := defaultGraphName(root, aiDir, scopeName)
 	if pushGraphName != "" {
 		graph = pushGraphName
 	}

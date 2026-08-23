@@ -17,6 +17,12 @@ type ScopeConfig struct {
 	// Database filename relative to .ai/ directory (e.g., "platform.db", "selling.db")
 	Database string `json:"database"`
 
+	// HubGraph overrides the name this scope is published under on a shared hub.
+	// Empty means the default naming rule applies (<repo> for the default scope,
+	// <repo>.<scope> otherwise). Needed because `kg push --graph` names a single
+	// database and so cannot express per-scope names during --all-scopes.
+	HubGraph string `json:"hubGraph,omitempty"`
+
 	// Layers are other scopes to federate with (read-only). Queries merge results from all layers.
 	// Example: ["platform"] means this scope builds on platform knowledge.
 	Layers []string `json:"layers,omitempty"`
