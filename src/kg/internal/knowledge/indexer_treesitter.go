@@ -48,6 +48,15 @@ type langConfig struct {
 	// Needed for languages like C/C++ where the function name is nested under a declarator chain.
 	// If nil, extractNodeName(node, src, cfg.NameField) is used.
 	extractFuncName func(node *sitter.Node, src []byte) string
+	// extractFuncQualifier returns what distinguishes this function from
+	// another of the same name in the same file — a Go method's receiver type,
+	// say. It is needed only where the owning declaration is not an ancestor in
+	// the parse tree: methods written inside a class body are qualified by the
+	// enclosing-declaration chain walkNode already tracks, with no config.
+	//
+	// The result becomes part of the entity ID and never part of the displayed
+	// name, so a human still searches for "get", not "Store.get".
+	extractFuncQualifier func(node *sitter.Node, src []byte) string
 	// extractTypeName overrides the default name extraction for type nodes.
 	// If nil, extractNodeName(node, src, cfg.NameField) is used.
 	extractTypeName func(node *sitter.Node, src []byte) string
@@ -111,6 +120,66 @@ func extractDeclName(node *sitter.Node, src []byte) string {
 	return ""
 }
 
+// extractGoReceiverType returns the receiver type name of a Go method
+// declaration — "Store" for func (s *Store) get(), "Store" for
+// func (s *Store[K, V]) get() — and "" for a plain function.
+//
+// Go is the case the enclosing-declaration chain cannot cover: a method is a
+// top-level declaration whose owning type is named in the receiver rather than
+// being an ancestor node, so without this every method in a file collapses onto
+// any package-level function or sibling method of the same name.
+//
+// The first type_identifier in the receiver subtree is the type: pointer_type
+// and generic_type both wrap it, and type arguments come after it.
+func extractGoReceiverType(node *sitter.Node, src []byte) string {
+	recv := node.ChildByFieldName("receiver")
+	if recv == nil {
+		return ""
+	}
+	return firstDescendantOfType(recv, "type_identifier", src)
+}
+
+// firstDescendantOfType returns the text of the first node of the given type in
+// a pre-order walk of the subtree, or "" if there is none.
+func firstDescendantOfType(node *sitter.Node, nodeType string, src []byte) string {
+	if node.Type() == nodeType {
+		return node.Content(src)
+	}
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		if found := firstDescendantOfType(node.NamedChild(i), nodeType, src); found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
+// qualifiedSymbolID builds the entity ID for a symbol declared in relPath.
+//
+// qualifier is the dotted chain of declarations the symbol sits inside
+// ("Cache", "Cache.load", or a Go method's receiver type); it is empty for a
+// file-level symbol, which keeps those IDs byte-identical to what earlier
+// builds produced.
+//
+// Everything in the ID is read from the source text, never from a line or byte
+// offset, so the ID is stable across a re-index of unchanged code and across
+// edits elsewhere in the file. kglib's journal relies on exactly that: it
+// records an indexer ID as a hint for replaying hand-written knowledge after a
+// rebuild (see stableIDHint in kglib/journal.go).
+func qualifiedSymbolID(kind, relPath, qualifier, name string) string {
+	if qualifier == "" {
+		return fmt.Sprintf("%s:%s:%s", kind, relPath, name)
+	}
+	return fmt.Sprintf("%s:%s:%s.%s", kind, relPath, qualifier, name)
+}
+
+// extendQualifier appends one declaration name to a qualifier chain.
+func extendQualifier(qualifier, name string) string {
+	if qualifier == "" {
+		return name
+	}
+	return qualifier + "." + name
+}
+
 // extractCInclude extracts the header path from a preproc_include node.
 func extractCInclude(node *sitter.Node, src []byte) []string {
 	// Prefer the structured "path" field (system_lib_string or string_literal)
@@ -172,12 +241,13 @@ func init() {
 
 	langRegistry = map[string]langConfig{
 		".go": {
-			Language:        golang.GetLanguage(),
-			FuncNodeTypes:   []string{"function_declaration", "method_declaration"},
-			TypeNodeTypes:   []string{"type_spec"},
-			ImportNodeTypes: []string{"import_spec"},
-			CallNodeTypes:   []string{"call_expression"},
-			NameField:       "name",
+			Language:             golang.GetLanguage(),
+			FuncNodeTypes:        []string{"function_declaration", "method_declaration"},
+			TypeNodeTypes:        []string{"type_spec"},
+			ImportNodeTypes:      []string{"import_spec"},
+			CallNodeTypes:        []string{"call_expression"},
+			NameField:            "name",
+			extractFuncQualifier: extractGoReceiverType,
 			extractImportPath: func(node *sitter.Node, src []byte) []string {
 				// import_spec has an interpreted_string_literal child
 				for i := 0; i < int(node.NamedChildCount()); i++ {
@@ -493,12 +563,17 @@ func (idx *Indexer) processWithTreeSitter(
 		stats.EntitiesCreated++
 	}
 
-	idx.walkNode(tree.RootNode(), src, fileID, relPath, cfg, entities, seenEntities, relations, calls, "", stats, now)
+	idx.walkNode(tree.RootNode(), src, fileID, relPath, cfg, entities, seenEntities, relations, calls, "", "", stats, now)
 	return nil
 }
 
 // walkNode performs a depth-first traversal of the parse tree, extracting
 // structural entities and relations.
+//
+// enclosingQual is the dotted chain of declarations this node sits inside
+// ("Cache", "Cache.load"). It qualifies the IDs of the symbols found below it,
+// so two methods named get in one file are two entities rather than one that
+// claims to make both of their calls.
 func (idx *Indexer) walkNode(
 	node *sitter.Node,
 	src []byte,
@@ -509,6 +584,7 @@ func (idx *Indexer) walkNode(
 	relations *[]relationRecord,
 	calls *[]pendingCall,
 	enclosingFunc string,
+	enclosingQual string,
 	stats *IndexStats,
 	now time.Time,
 ) {
@@ -517,6 +593,7 @@ func (idx *Indexer) walkNode(
 	// Call sites are attributed to the function they appear in, so the current
 	// function propagates down to this node's subtree.
 	childEnclosing := enclosingFunc
+	childQual := enclosingQual
 
 	switch {
 	case nodeType == "package_clause":
@@ -544,7 +621,16 @@ func (idx *Indexer) walkNode(
 		if name == "" {
 			break
 		}
-		funcID := fmt.Sprintf("function:%s:%s", relPath, name)
+		// A method is distinguished by what owns it: its receiver type where the
+		// language puts that in the declaration (Go), and otherwise the class or
+		// function this node is nested in.
+		qual := enclosingQual
+		if cfg.extractFuncQualifier != nil {
+			if owner := cfg.extractFuncQualifier(node, src); owner != "" {
+				qual = extendQualifier(qual, owner)
+			}
+		}
+		funcID := qualifiedSymbolID(EntityTypeFunction, relPath, qual, name)
 		if writeEntityVis(entities, seenEntities, funcID, name, EntityTypeFunction, idx.projectID, now, symbolVisibility(cfg, name)) {
 			stats.EntitiesCreated++
 		}
@@ -552,6 +638,9 @@ func (idx *Indexer) walkNode(
 		// Calls in this function's body belong to it, including those nested in
 		// lambdas passed to it (Kotlin's launch { work() }, Scala's xs.map { … }).
 		childEnclosing = funcID
+		// Functions declared inside this one — Python's decorator wrappers, JS
+		// closures — are qualified by it, for the same reason methods are.
+		childQual = extendQualifier(qual, name)
 
 	case slices.Contains(cfg.TypeNodeTypes, nodeType):
 		var name string
@@ -563,11 +652,14 @@ func (idx *Indexer) walkNode(
 		if name == "" {
 			break
 		}
-		typeID := fmt.Sprintf("type:%s:%s", relPath, name)
+		typeID := qualifiedSymbolID(EntityTypeType, relPath, enclosingQual, name)
 		if writeEntityVis(entities, seenEntities, typeID, name, EntityTypeType, idx.projectID, now, symbolVisibility(cfg, name)) {
 			stats.EntitiesCreated++
 		}
 		*relations = append(*relations, relationRecord{FromID: fileID, ToID: typeID, Type: RelContains})
+		// Members declared inside this type carry its name, which is what makes
+		// two same-named methods in one file distinguishable.
+		childQual = extendQualifier(enclosingQual, name)
 
 	case len(cfg.CallNodeTypes) > 0 && slices.Contains(cfg.CallNodeTypes, nodeType):
 		// Only attribute calls made from inside a known function. Top-level
@@ -605,7 +697,7 @@ func (idx *Indexer) walkNode(
 	// Recurse into children
 	for i := 0; i < int(node.ChildCount()); i++ {
 		if child := node.Child(i); child != nil {
-			idx.walkNode(child, src, fileID, relPath, cfg, entities, seenEntities, relations, calls, childEnclosing, stats, now)
+			idx.walkNode(child, src, fileID, relPath, cfg, entities, seenEntities, relations, calls, childEnclosing, childQual, stats, now)
 		}
 	}
 }
