@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/cortexa-llc/mcp/kglib"
 	"github.com/spf13/cobra"
 )
 
@@ -50,6 +51,10 @@ func Execute(version, commit, buildTime string) {
 	kgVersion = version
 	kgCommit = commit
 	kgBuildTime = buildTime
+
+	// Recorded in the format stamp written beside every database, so a graph
+	// that later fails to open can still say which kg wrote it.
+	kglib.SetBuildVersion(version)
 
 	// Set version and custom template for --version flag
 	rootCmd.Version = version

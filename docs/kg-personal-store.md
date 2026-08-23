@@ -191,6 +191,26 @@ Worth knowing before you capture: summarise around customer PII, credentials, an
 commercially sensitive detail rather than copying it into the graph. A knowledge store is
 long-lived and gets read by future agent sessions.
 
+## Backing it up
+
+The personal store is the one graph with no source to rebuild from — everything in
+it was written by hand. `kg export` writes it as JSONL:
+
+```bash
+kg export --personal -o ~/personal-kg-backup.jsonl
+kg import --personal ~/personal-kg-backup.jsonl   # restore, idempotent
+```
+
+A restore only reinstates what the store held when the backup was taken. Entries
+removed with `kg personal forget` before the export stay gone — the export is a
+current-state dump, not a replay of everything that ever happened.
+
+You do not need a backup to survive a kg upgrade. Every hand-write is also
+appended to a journal beside the database (`knowledge.db.journal.jsonl`), which
+kg replays automatically if a Kuzu storage-format change ever makes the database
+itself unreadable. The backup is for the cases a journal cannot help with: a lost
+laptop, a deleted directory, moving to another machine.
+
 ## What belongs here, and what does not
 
 | Put it in the personal store | Put it in the project graph |
