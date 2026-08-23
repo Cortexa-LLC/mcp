@@ -151,20 +151,76 @@ func readLinesFromFile(path string) []string {
 	return result
 }
 
-// clearProjectData removes all entities, their observations, and all relations
-// for this project so the index can be rebuilt from scratch.
-func (idx *Indexer) clearProjectData() error {
-	// Delete all typed entity-to-entity relations for this project.
-	for _, relType := range AllowedRelTypes {
+// relationTablesFromCatalog returns every Entity→Entity relationship table the
+// database actually holds, read from the Kuzu catalog.
+//
+// This duplicates kglib's unexported (*Store).relationTables, which is not
+// reachable from this package; the two must stay in step, so change both. Its
+// argument for reading the catalog rather than a compiled-in list applies
+// verbatim here: the catalog reflects tables a previous SchemaConfig created,
+// which the current AllowedRelTypes may no longer list. Deleting only what the
+// current list names leaves edges from a retired relation type behind, and they
+// survive every re-index — a graph that disagrees with the source tree and has
+// no way to be brought back into agreement.
+//
+// HAS_OBSERVATION is excluded: it is the structural Entity→Observation edge,
+// deleted with its Observation nodes separately.
+func (idx *Indexer) relationTablesFromCatalog() ([]string, error) {
+	result, err := idx.store.Query("CALL show_tables() RETURN name, type")
+	if err != nil {
+		return nil, fmt.Errorf("list relation tables: %w", err)
+	}
+	defer result.Close()
+
+	var tables []string
+	for result.HasNext() {
+		row, err := result.Next()
+		if err != nil {
+			return nil, fmt.Errorf("list relation tables: %w", err)
+		}
+		nameVal, _ := row.GetValue(0)
+		typeVal, _ := row.GetValue(1)
+		name, _ := nameVal.(string)
+		tableType, _ := typeVal.(string)
+		if tableType != "REL" || name == "HAS_OBSERVATION" {
+			continue
+		}
+		tables = append(tables, name)
+	}
+	return tables, nil
+}
+
+// deleteProjectRelations removes every entity-to-entity relation this project
+// holds, whatever table it lives in.
+//
+// The table list comes from the catalog, never from AllowedRelTypes: a sweep
+// that misses a table is a sweep that silently keeps stale edges, so a catalog
+// read that fails aborts the index rather than falling back to the compiled-in
+// list and quietly under-deleting.
+func (idx *Indexer) deleteProjectRelations() error {
+	relTypes, err := idx.relationTablesFromCatalog()
+	if err != nil {
+		return err
+	}
+	for _, relType := range relTypes {
 		query := fmt.Sprintf(`
 			MATCH (from:Entity {project_id: $project_id})-[r:%s]->(to:Entity {project_id: $project_id})
 			DELETE r
-		`, relType) // relType is from a hardcoded whitelist — safe to interpolate
+		`, relType) // relType is a catalog table name, not user input — safe to interpolate
 		result, err := idx.store.QueryParams(query, map[string]any{"project_id": idx.projectID})
 		if err != nil {
 			return fmt.Errorf("delete %s relations: %w", relType, err)
 		}
 		result.Close()
+	}
+	return nil
+}
+
+// clearProjectData removes all entities, their observations, and all relations
+// for this project so the index can be rebuilt from scratch.
+func (idx *Indexer) clearProjectData() error {
+	if err := idx.deleteProjectRelations(); err != nil {
+		return err
 	}
 
 	// Delete HAS_OBSERVATION edges and their Observation nodes for this project.
@@ -468,8 +524,11 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 // a wrong CALLS edge is worse than a missing one, because it invents a
 // dependency that does not exist:
 //
-//  1. Same file: if the enclosing file defines a function of that name, link to
-//     it. Safe, and covers the common helper-in-the-same-file case.
+//  1. Same file: if the enclosing file defines exactly one function of that
+//     name, link to it. Safe, and covers the common helper-in-the-same-file
+//     case. A file that defines the name twice — two methods called get on
+//     different receivers — is ambiguous and takes no edge; picking one would
+//     be the invented dependency this ordering exists to avoid.
 //  2. Globally unique: if exactly one function of that name exists anywhere in
 //     the scope, link to it. A name with two or more definitions is ambiguous
 //     and is dropped rather than guessed.
@@ -477,8 +536,14 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 // Everything else is left unresolved: standard-library and third-party calls,
 // and common method names like `apply`, `get` or `map` that are defined many
 // times over. Unresolved counts are reported so the ratio stays visible.
-func resolveCalls(calls []pendingCall, entities []entityRecord, seen map[string]bool) (rels []relationRecord, unresolved, ambiguous int) {
-	// Index function entity IDs by bare name.
+//
+// seen is unused now that same-file lookup goes through the name index; a
+// function entity's ID is qualified by its receiver or enclosing declaration
+// (see qualifiedSymbolID), so it can no longer be reconstructed from a bare
+// callee name.
+func resolveCalls(calls []pendingCall, entities []entityRecord, _ map[string]bool) (rels []relationRecord, unresolved, ambiguous int) {
+	// Index function entity IDs by bare name. Names stay bare precisely so this
+	// index — and a human searching for "get" — still works after qualification.
 	byName := make(map[string][]string)
 	for _, e := range entities {
 		if e.Type == EntityTypeFunction {
@@ -487,12 +552,26 @@ func resolveCalls(calls []pendingCall, entities []entityRecord, seen map[string]
 	}
 
 	for _, c := range calls {
-		sameFile := fmt.Sprintf("function:%s:%s", c.RelPath, c.CalleeName)
-		if seen[sameFile] {
-			rels = append(rels, relationRecord{FromID: c.FromID, ToID: sameFile, Type: RelCalls})
+		candidates := byName[c.CalleeName]
+
+		// Same-file candidates, identified by the ID prefix every symbol in a
+		// file shares rather than by parsing an ID back apart.
+		prefix := fmt.Sprintf("function:%s:", c.RelPath)
+		local := make([]string, 0, 1)
+		for _, id := range candidates {
+			if strings.HasPrefix(id, prefix) {
+				local = append(local, id)
+			}
+		}
+		if len(local) == 1 {
+			rels = append(rels, relationRecord{FromID: c.FromID, ToID: local[0], Type: RelCalls})
 			continue
 		}
-		candidates := byName[c.CalleeName]
+		if len(local) > 1 {
+			ambiguous++
+			continue
+		}
+
 		switch {
 		case len(candidates) == 1:
 			rels = append(rels, relationRecord{FromID: c.FromID, ToID: candidates[0], Type: RelCalls})
