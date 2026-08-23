@@ -673,6 +673,11 @@ This buys two things:
 Journals stay small — hand-writes are rare by construction — but `kg export
 --journal` compacts one to its current state if you want to prune churn.
 
+Installing kg keeps the binary it replaces, as `kg.old-<version>` beside the new
+one (so, normally, in `/usr/local/bin`). That covers the one case neither the
+journal nor a rebuild can: a database written before journaling existed, which
+has nothing to replay. The two most recent are kept; older ones are pruned.
+
 ---
 
 ## Environment Variables
@@ -681,7 +686,7 @@ Journals stay small — hand-writes are rare by construction — but `kg export
 |----------|--------|
 | `OPENAI_API_KEY` | Enables OpenAI embeddings for semantic (vector) search |
 | `OLLAMA_HOST` | Enables Ollama embeddings (default: `http://localhost:11434`) |
-| `KG_HOME` | Directory holding the personal knowledge store and retained kg binaries (default: `~/.kg`) |
+| `KG_HOME` | Directory holding the personal knowledge store (default: `~/.kg`) |
 | `KG_HUB_HOME` | Data directory for `kg hub serve` (default: `~/.kg-hub`) |
 | `KG_HUB_READ_TOKEN` | Read token: required by `kg hub serve` clients, sent by `kg hub list` |
 | `KG_HUB_SEED_TOKEN` | Seed token: enables seeding on `kg hub serve`, required by `kg push` |
