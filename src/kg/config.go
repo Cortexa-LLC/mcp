@@ -104,8 +104,70 @@ var configListScopesCmd = &cobra.Command{
 	},
 }
 
+var configSetHubCmd = &cobra.Command{
+	Use:   "set-hub <url>",
+	Short: "Trust a shared knowledge hub for this user",
+	Long: `Record which shared knowledge hub this user trusts.
+
+Stored per user (in $KG_HOME/config.json, default ~/.kg/config.json), not in the
+repository — deliberately. Federated search sends your KG_HUB_READ_TOKEN to the
+hub as a bearer token, so whoever chooses the URL chooses where that credential
+goes. A cloned repository must not be able to make that choice.
+
+A project can still say which graphs to federate, through a scope's "remotes".
+Naming graphs on a hub you already trust carries no such authority.
+
+Examples:
+  kg config set-hub https://kg.internal:7411
+  kg config set-hub ""                       # stop trusting any hub`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := knowledge.SetUserHubURL(args[0])
+		if err != nil {
+			return err
+		}
+		if args[0] == "" {
+			cmd.Printf("Cleared the trusted hub in %s\n", path)
+			return nil
+		}
+		cmd.Printf("Trusting hub %s (recorded in %s)\n", args[0], path)
+		return nil
+	},
+}
+
+var configShowHubCmd = &cobra.Command{
+	Use:   "show-hub",
+	Short: "Show the trusted hub, and any this project asks for",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		aiDir := filepath.Join(findProjectRoot(cwd), ".ai")
+
+		trusted, err := knowledge.GetHubURL(aiDir)
+		if err != nil {
+			return err
+		}
+		if trusted == "" {
+			cmd.Println("Trusted hub: none (set one with 'kg config set-hub <url>')")
+		} else {
+			cmd.Printf("Trusted hub: %s\n", trusted)
+		}
+
+		if suggested := knowledge.RepoSuggestedHubURL(aiDir); suggested != "" && suggested != trusted {
+			cmd.Printf("\nThis project names %s in .ai/config.json, which is NOT used.\n", suggested)
+			cmd.Printf("A hub named by a repository would decide where your KG_HUB_READ_TOKEN is sent.\n")
+			cmd.Printf("If you recognise it: kg config set-hub %s\n", suggested)
+		}
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(configCmd)
 	configCmd.AddCommand(configSetDefaultCmd)
 	configCmd.AddCommand(configListScopesCmd)
+	configCmd.AddCommand(configSetHubCmd)
+	configCmd.AddCommand(configShowHubCmd)
 }

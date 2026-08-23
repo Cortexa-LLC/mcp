@@ -5,9 +5,7 @@
 package knowledge_test
 
 import (
-	"encoding/json"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -54,13 +52,19 @@ func TestFederatedStoreWithRemotes(t *testing.T) {
 		t.Fatalf("push platform: %v", err)
 	}
 
-	// Local project: aiDir pointing at the hub, scope team-a with a local
-	// database containing LocalThing and the platform graph as a remote.
+	// Local project: scope team-a with a local database containing LocalThing
+	// and the platform graph as a remote.
+	//
+	// The hub is trusted at the user level, not named in the repo's
+	// .ai/config.json. A repo-named hub is deliberately ignored — it would
+	// decide where KG_HUB_READ_TOKEN is sent — so configuring it that way here
+	// would exercise a path that no longer federates anything.
 	aiDir := t.TempDir()
 	projectID := "consumer-proj"
-	hubCfg, _ := json.Marshal(map[string]string{"hub": hubServer.URL})
-	if err := os.WriteFile(filepath.Join(aiDir, "config.json"), hubCfg, 0644); err != nil {
-		t.Fatal(err)
+	t.Setenv("KG_HOME", t.TempDir())
+	t.Setenv("KG_HUB_URL", "")
+	if _, err := knowledge.SetUserHubURL(hubServer.URL); err != nil {
+		t.Fatalf("SetUserHubURL: %v", err)
 	}
 	buildDB(t, filepath.Join(aiDir, "team-a.db"), "LocalThing", projectID)
 	scopeCfg := &knowledge.ScopeConfig{

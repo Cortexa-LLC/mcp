@@ -71,7 +71,7 @@ Each scope defines:
 - **name** (required): Scope identifier
 - **database** (required): Database filename (relative to `.ai/`)
 - **layers** (optional): Array of scope names to federate with (read-only)
-- **remotes** (optional): Array of hub graph names to federate with over HTTP (read-only). Requires a `"hub"` URL in `.ai/config.json` — see [kg-shared-service.md](kg-shared-service.md)
+- **remotes** (optional): Array of hub graph names to federate with over HTTP (read-only). Requires a hub the *user* trusts (`kg config set-hub <url>` or `KG_HUB_URL`) — a `"hub"` key in the repo's `.ai/config.json` is reported but not used, since it would decide where your `KG_HUB_READ_TOKEN` is sent. See [kg-shared-service.md](kg-shared-service.md)
 - **include** (optional): Glob patterns to include (default: `["**/*"]`)
 - **exclude** (optional): Glob patterns to exclude
 - **includeModules** (optional): When set, only these `modules/<name>/` directories are indexed. Implicitly excludes all other modules.

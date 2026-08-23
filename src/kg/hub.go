@@ -236,7 +236,12 @@ func resolveHubURL(flagValue string) (string, error) {
 		return "", err
 	}
 	if hubURL == "" {
-		return "", fmt.Errorf("no hub configured: pass --hub or set \"hub\" in .ai/config.json")
+		if suggested := knowledge.RepoSuggestedHubURL(aiDir); suggested != "" {
+			return "", fmt.Errorf("no trusted hub configured. This project names %q, but a hub named by "+
+				"a repository is not trusted — it would decide where your KG_HUB_READ_TOKEN is sent. "+
+				"If you recognise it: kg config set-hub %s", suggested, suggested)
+		}
+		return "", fmt.Errorf("no hub configured: pass --hub, run 'kg config set-hub <url>', or set KG_HUB_URL")
 	}
 	return hubURL, nil
 }

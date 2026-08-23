@@ -76,6 +76,21 @@ hub in `.ai/config.json`:
 }
 ```
 
+The hub URL is **not** read from this file. Federated search sends
+`KG_HUB_READ_TOKEN` to the hub as a bearer token, so whoever chooses the URL
+chooses where that credential goes — and `.ai/` is committed and shared, so a
+repository you cloned must not be able to choose. Set it per user instead:
+
+```bash
+kg config set-hub https://kg.internal:7411   # stored in ~/.kg/config.json
+kg config show-hub                            # what is trusted, and what this project asks for
+```
+
+A `"hub"` key here is still *reported* — `kg config show-hub` will tell you the
+project expects it and offer the command to trust it — so a team can share the
+address without sharing the authority to use it.
+
+
 Then list hub graphs as `remotes` in the scope that should see them
 (`.ai/scope/main.json`):
 
