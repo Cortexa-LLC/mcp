@@ -116,6 +116,20 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 		fmt.Printf("🔍 Indexing codebase at %s...\n", root)
 	}
 
+	// A database written by a different Kuzu storage format cannot be opened at
+	// all, so the check has to happen before the open, not in response to its
+	// error. Indexing is exactly the operation that repairs one: the derived
+	// content is about to be regenerated from the tree anyway.
+	aside, err := archiveIfMismatch(dbPath, os.Stdout)
+	if err != nil {
+		return fmt.Errorf("rebuild %s: %w", dbPath, err)
+	}
+	journalSrc := kglib.JournalPath(dbPath)
+	if aside != "" {
+		// The journal moved with the archived database.
+		journalSrc = kglib.JournalPath(aside)
+	}
+
 	store, err := knowledge.OpenStore(dbPath)
 	if err != nil {
 		return fmt.Errorf("open Kuzu store: %w", err)
@@ -183,7 +197,7 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 	// hand-written ones with it — they share the project ID. The journal is the
 	// only copy of those, so replay them back now that the derived content is
 	// in place. This runs on every index, not only after a format migration.
-	if _, err := restoreHandWrites(store, dbPath, kglib.JournalPath(dbPath), os.Stdout); err != nil {
+	if _, err := restoreHandWrites(store, dbPath, journalSrc, os.Stdout); err != nil {
 		fmt.Printf("Warning: restoring hand-written knowledge failed: %v\n", err)
 	}
 

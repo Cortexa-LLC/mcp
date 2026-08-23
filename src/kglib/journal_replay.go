@@ -62,10 +62,30 @@ func (r *ReplayStats) fail(err error) {
 // A missing journal file is not an error — a database that has only ever been
 // indexed has nothing hand-written to replay.
 func (s *Store) ReplayJournal(path string) (ReplayStats, error) {
-	return s.replay(path, false)
+	return s.replay(path, false, "")
 }
 
-func (s *Store) replay(path string, keepJournaling bool) (ReplayStats, error) {
+// ImportRecords applies records that came from somewhere else — an export, a
+// backup, another machine's graph — and journals what it applies.
+//
+// This is the opposite choice from ReplayJournal, for the opposite situation.
+// Replay is re-applying writes this database already has a journal for. Import
+// is writing knowledge that has no journal entry here yet, and skipping the
+// journal would mean the imported knowledge did not survive the next
+// storage-format rebuild: exactly the failure the journal exists to prevent.
+// projectID, when non-empty, replaces the project on every record.
+//
+// Records carry the project they were exported from, and a graph is only
+// visible to queries for its own project ID. Importing another project's dump
+// verbatim therefore writes rows that are present in the database but invisible
+// to every search against it — data that is there and unreachable, which is a
+// worse outcome than a clear failure. Callers restoring into a given graph pass
+// that graph's project ID; passing "" preserves whatever the file says.
+func (s *Store) ImportRecords(path, projectID string) (ReplayStats, error) {
+	return s.replay(path, true, projectID)
+}
+
+func (s *Store) replay(path string, keepJournaling bool, projectOverride string) (ReplayStats, error) {
 	var stats ReplayStats
 
 	f, err := os.Open(path)
@@ -108,6 +128,9 @@ func (s *Store) replay(path string, keepJournaling bool) (ReplayStats, error) {
 		if err := json.Unmarshal(raw, &rec); err != nil {
 			stats.fail(fmt.Errorf("line %d: parse: %w", line, err))
 			continue
+		}
+		if projectOverride != "" {
+			rec.ProjectID = projectOverride
 		}
 		if rec.Version > JournalVersion {
 			stats.fail(fmt.Errorf("line %d: journal version %d is newer than this build understands (%d)",

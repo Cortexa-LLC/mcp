@@ -13,6 +13,7 @@ import argparse
 import datetime
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -181,13 +182,89 @@ def build_mcp(name: str, cfg: dict) -> Path:
     info(f"Built: {built}")
     return built
 
+# How many superseded binaries to keep. One is all the migration path needs —
+# the immediately-outgoing build — but these are ~45 MB each, so the cap stays
+# tight rather than growing an archive nobody asked for.
+RETAINED_BINARIES = 2
+
+def kg_home() -> Path:
+    """The kg home directory, matching the KG_HOME override the binary honours."""
+    override = os.environ.get("KG_HOME")
+    return Path(override) if override else Path.home() / ".kg"
+
+def binary_version(binary: Path) -> str:
+    """Best-effort version of an installed binary, for naming the retained copy."""
+    try:
+        r = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=10)
+        first = (r.stdout or "").strip().splitlines()
+        if first:
+            # "kg version v0.1.0-7-g73dc211 built ..." -> "v0.1.0-7-g73dc211"
+            parts = first[0].split()
+            for part in parts:
+                if part.startswith("v") and any(ch.isdigit() for ch in part):
+                    return re.sub(r"[^A-Za-z0-9._-]", "_", part)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # A binary that will not report a version still needs a distinct name.
+    return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+def retain_previous(dest: Path) -> Path | None:
+    """Keep the binary being replaced, so a database it wrote can still be read.
+
+    Kuzu pins its storage format to the library version. Databases written
+    before kg started stamping that version have no way to declare what wrote
+    them, and no journal to replay, so the only route back into one is the
+    binary that created it. Keeping the outgoing build makes that possible for
+    the one generation of databases that predates journaling; after that the
+    journal handles it and this is dead weight.
+    """
+    if not dest.exists():
+        return None
+
+    outdir = kg_home() / "bin"
+    outdir.mkdir(parents=True, exist_ok=True)
+    kept = outdir / f"{dest.name}-{binary_version(dest)}"
+
+    if not kept.exists():
+        try:
+            shutil.copy2(dest, kept)
+            if not IS_WINDOWS:
+                kept.chmod(0o755)
+        except OSError as e:
+            # Retention is insurance, not a prerequisite. A full disk should not
+            # be able to block an upgrade.
+            warn(f"Could not retain the previous {dest.name}: {e}")
+            return None
+
+    prune_retained(outdir, dest.name)
+    return kept
+
+def prune_retained(outdir: Path, prefix: str) -> None:
+    """Drop all but the most recent RETAINED_BINARIES copies of one binary."""
+    try:
+        kept = sorted(
+            (p for p in outdir.glob(f"{prefix}-*") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return
+    for stale in kept[RETAINED_BINARIES:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
 def install_binary(bin_path: Path, install_dir: Path) -> Path:
     install_dir.mkdir(parents=True, exist_ok=True)
     dest = install_dir / bin_path.name
+    retained = retain_previous(dest)
     shutil.copy2(bin_path, dest)
     if not IS_WINDOWS:
         dest.chmod(0o755)
     info(f"Installed: {dest}")
+    if retained:
+        info(f"Previous build kept at {retained} (for reading databases it wrote)")
     return dest
 
 def check_path(install_dir: Path) -> None:

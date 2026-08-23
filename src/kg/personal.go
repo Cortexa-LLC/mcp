@@ -92,6 +92,16 @@ func openPersonalStore(readOnly bool) (*knowledge.Store, string, error) {
 		return nil, "", fmt.Errorf("no personal knowledge store at %s yet — create it with 'kg personal init'", dbPath)
 	}
 
+	// The personal store has no source tree to be re-indexed from, so a
+	// storage-format rebuild is just a fresh database plus a journal replay —
+	// fast enough to do inline rather than making the user run a command. Only
+	// on a write-mode open: a read-only open cannot create the replacement.
+	if !readOnly {
+		if _, err := rebuildHandWritesOnly(dbPath, os.Stderr); err != nil {
+			return nil, "", fmt.Errorf("rebuild personal store: %w", err)
+		}
+	}
+
 	var store *knowledge.Store
 	if readOnly {
 		store, err = knowledge.OpenStoreReadOnly(dbPath)
