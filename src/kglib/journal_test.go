@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newJournaledStore opens a store at dbPath with hand-write journaling on.
@@ -486,4 +487,160 @@ func TestReplayMissingJournalIsNotAnError(t *testing.T) {
 	if stats.Records != 0 {
 		t.Errorf("records = %d, want 0", stats.Records)
 	}
+}
+
+// The collision the audit found: indexed code symbols routinely share
+// (name, type) across files. kg's own graph holds 1460 entities covering only
+// 1370 distinct pairs, with `init` appearing 21 times.
+//
+// Resolving a hand-written note on that tuple alone attaches it to whichever
+// row the database yields first — silently, and permanently, because the
+// duplicate check then reports it as already present on every later replay.
+func TestReplayResolvesCollidingNamesByStableID(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store := newJournaledStore(t, dbPath)
+
+	// Two same-named symbols, the way an indexer writes them: IDs derived from
+	// source position, so they are stable across a rebuild.
+	mustCreateWithID(t, store, "function:cmd/main.go:Run", "Run", "function", "p")
+	mustCreateWithID(t, store, "function:auth/handler.go:Run", "Run", "function", "p")
+
+	target, err := store.GetEntity("function:auth/handler.go:Run", "p")
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	if _, err := store.CreateObservation(target.ID, "rate-limits at 100rps", "p"); err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+	store.Close()
+
+	// The record must name the specific symbol, not just "Run".
+	recs := readJournal(t, dbPath)
+	var obs *JournalRecord
+	for i := range recs {
+		if recs[i].Op == OpCreateObservation {
+			obs = &recs[i]
+		}
+	}
+	if obs == nil {
+		t.Fatal("no observation record in the journal")
+	}
+	if obs.Entity.ID != "function:auth/handler.go:Run" {
+		t.Fatalf("record identifies the parent as %q; without the source-derived ID "+
+			"replay cannot tell the two Run functions apart", obs.Entity.ID)
+	}
+
+	// Rebuild: same two symbols, same deterministic IDs, no observations.
+	fresh, err := OpenStore(filepath.Join(tmpDir, "new.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer fresh.Close()
+	mustCreateWithID(t, fresh, "function:cmd/main.go:Run", "Run", "function", "p")
+	mustCreateWithID(t, fresh, "function:auth/handler.go:Run", "Run", "function", "p")
+
+	stats, err := fresh.ReplayJournal(JournalPath(dbPath))
+	if err != nil {
+		t.Fatalf("ReplayJournal: %v", err)
+	}
+	if stats.Failed != 0 {
+		t.Fatalf("replay failures: %v", stats.Errors)
+	}
+	if stats.Ambiguous != 0 {
+		t.Errorf("replay resolved %d record(s) ambiguously: %v", stats.Ambiguous, stats.Ambiguities)
+	}
+
+	// The note landed on the right Run.
+	right, err := fresh.GetObservations("function:auth/handler.go:Run", "p")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(right) != 1 || right[0].Content != "rate-limits at 100rps" {
+		t.Errorf("auth/handler.go:Run has %+v, want the hand-written note", right)
+	}
+
+	wrong, err := fresh.GetObservations("function:cmd/main.go:Run", "p")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(wrong) != 0 {
+		t.Errorf("the note was attached to the wrong Run: %+v", wrong)
+	}
+}
+
+// When the ID cannot resolve — a journal written before the hint existed, or a
+// symbol whose file moved — replay still falls back to (name, type), but says
+// when that choice was arbitrary rather than making it silently.
+func TestReplayReportsAmbiguousNameFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	journalPath := filepath.Join(tmpDir, "old.db.journal.jsonl")
+	// No "id" field: the shape written before the hint existed.
+	line := `{"v":1,"op":"observation.create","project":"p",` +
+		`"entity":{"name":"Run","type":"function"},"content":"a note"}` + "\n"
+	if err := os.WriteFile(journalPath, []byte(line), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fresh, err := OpenStore(filepath.Join(tmpDir, "new.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer fresh.Close()
+	mustCreateWithID(t, fresh, "function:cmd/main.go:Run", "Run", "function", "p")
+	mustCreateWithID(t, fresh, "function:auth/handler.go:Run", "Run", "function", "p")
+
+	stats, err := fresh.ReplayJournal(journalPath)
+	if err != nil {
+		t.Fatalf("ReplayJournal: %v", err)
+	}
+	if stats.Applied != 1 {
+		t.Errorf("applied = %d, want 1 — the note should still land somewhere", stats.Applied)
+	}
+	if stats.Ambiguous != 1 {
+		t.Errorf("ambiguous = %d, want 1 — an arbitrary choice was made and not reported", stats.Ambiguous)
+	}
+	if len(stats.Ambiguities) == 0 {
+		t.Error("no detail recorded for the ambiguous resolution")
+	}
+}
+
+// A hand-created entity has a generated UUID, which does not survive a rebuild.
+// Recording it would put an unresolvable identifier in the journal, which is
+// what the format was designed to avoid.
+func TestJournalOmitsUnstableIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store := newJournaledStore(t, dbPath)
+	defer store.Close()
+
+	if _, err := store.CreateEntity("retry-policy", "decision", "p"); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	recs := readJournal(t, dbPath)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	if recs[0].Entity.ID != "" {
+		t.Errorf("journal recorded a generated UUID %q, which cannot resolve after a rebuild",
+			recs[0].Entity.ID)
+	}
+}
+
+// mustCreateWithID writes an entity with an indexer-style deterministic ID.
+func mustCreateWithID(t *testing.T, store *Store, id, name, entityType, projectID string) {
+	t.Helper()
+	result, err := store.QueryParams(`
+		CREATE (e:Entity {id: $id, name: $name, type: $type, project_id: $project_id,
+		                  created_at: $ts, updated_at: $ts})
+	`, map[string]any{
+		"id": id, "name": name, "type": entityType, "project_id": projectID,
+		"ts": time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create %s: %v", id, err)
+	}
+	result.Close()
 }

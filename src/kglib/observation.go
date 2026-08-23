@@ -54,7 +54,7 @@ func (s *Store) CreateObservation(entityID, content, projectID string) (*Observa
 	if err := s.appendJournal(JournalRecord{
 		Op:        OpCreateObservation,
 		ProjectID: projectID,
-		Entity:    &EntityRef{Name: entity.Name, Type: entity.Type},
+		Entity:    entityRef(entity),
 		Content:   content,
 	}); err != nil {
 		return obs, errJournalNote(err)
@@ -147,7 +147,7 @@ func (s *Store) DeleteObservation(obsID, entityID, projectID string) error {
 	if err := s.appendJournal(JournalRecord{
 		Op:        OpDeleteObservation,
 		ProjectID: projectID,
-		Entity:    &EntityRef{Name: entity.Name, Type: entity.Type},
+		Entity:    entityRef(entity),
 		Content:   deletedContent,
 	}); err != nil {
 		return errJournalNote(err)

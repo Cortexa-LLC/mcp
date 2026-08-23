@@ -29,18 +29,25 @@ import (
 // journalSrc is the journal to read: the archived one when a migration just
 // moved it aside, otherwise the database's own.
 func restoreHandWrites(store *knowledge.Store, dbPath, journalSrc string, out io.Writer) (kglib.ReplayStats, error) {
-	stats, err := store.ReplayJournal(journalSrc)
-	if err != nil {
-		return stats, err
-	}
+	stats, replayErr := store.ReplayJournal(journalSrc)
 
-	// After a migration the journal lives beside the archived database; copy it
-	// forward so the next format bump has one to work from rather than a chain
-	// of archives to walk back through.
+	// Carry the journal forward BEFORE reacting to a replay failure.
+	//
+	// After a migration the journal lives beside the archived database, and this
+	// copy is the only thing that puts one beside the new one. Returning early
+	// on a replay error skipped it, so the next run — seeing no format mismatch,
+	// and therefore reading the new database's own journal — found a file that
+	// was never written, replayed nothing, and the hand-written knowledge was
+	// gone from every path the tool would look at again. The failure that
+	// stranded it was one line of warning output.
 	if journalSrc != kglib.JournalPath(dbPath) {
 		if err := copyFile(journalSrc, kglib.JournalPath(dbPath)); err != nil {
-			return stats, fmt.Errorf("carry journal forward: %w", err)
+			return stats, fmt.Errorf("carry journal forward from %s: %w (replay error, if any: %v)",
+				journalSrc, err, replayErr)
 		}
+	}
+	if replayErr != nil {
+		return stats, replayErr
 	}
 
 	if stats.Applied > 0 || stats.Failed > 0 {
