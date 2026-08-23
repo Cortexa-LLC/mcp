@@ -206,7 +206,12 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 		if rec.Entity == nil {
 			return errors.New("record has no entity")
 		}
-		existing, err := s.resolveRef(*rec.Entity, rec.ProjectID, stats)
+		// Existence is checked by stable id when the record has one, never by
+		// the name fallback. Two entities that share a name are legitimately
+		// distinct — `Run` in two files, `Close` on four types — and resolving
+		// a create by name finds the wrong one and skips it, silently dropping
+		// every same-named symbol after the first.
+		existing, err := s.resolveForCreate(*rec.Entity, rec.ProjectID, stats)
 		if err != nil {
 			return err
 		}
@@ -214,8 +219,18 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 			stats.Skipped++
 			return nil
 		}
-		if _, err := s.CreateEntity(rec.Entity.Name, rec.Entity.Type, rec.ProjectID); err != nil {
+		created, err := s.createFromRef(*rec.Entity, rec.ProjectID)
+		if err != nil {
 			return err
+		}
+		// Restore the symbol's visibility when the record carries one. An
+		// export does; a hand-write does not, and must not be given one — empty
+		// means "no source symbol", which ranks with public rather than being
+		// demoted as private.
+		if rec.Visibility != "" {
+			if err := s.setEntityVisibility(created.ID, rec.Visibility, rec.ProjectID); err != nil {
+				return err
+			}
 		}
 		stats.Applied++
 		return nil
@@ -329,6 +344,32 @@ func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
 	}
 }
 
+// resolveForCreate answers "does this entity already exist" for a create
+// record, which is a stricter question than resolveRef's "what does this record
+// refer to". See the comment at its only call site.
+func (s *Store) resolveForCreate(ref EntityRef, projectID string, stats *ReplayStats) (*Entity, error) {
+	if ref.ID != "" {
+		entity, err := s.GetEntity(ref.ID, projectID)
+		if err != nil {
+			// GetEntity reports "not found" as an error rather than a nil
+			// entity, and not-found is the normal case here.
+			return nil, nil
+		}
+		return entity, nil
+	}
+	return s.resolveRef(ref, projectID, stats)
+}
+
+// createFromRef creates the entity a record describes, preserving its
+// source-derived id when it has one so later records in the same file can
+// resolve against it exactly rather than by name.
+func (s *Store) createFromRef(ref EntityRef, projectID string) (*Entity, error) {
+	if ref.ID != "" {
+		return s.createEntityWithID(ref.ID, ref.Name, ref.Type, projectID)
+	}
+	return s.CreateEntity(ref.Name, ref.Type, projectID)
+}
+
 // resolveRef finds the entity a record refers to, or nil when it is gone.
 //
 // The stable ID comes first. Indexer-derived IDs encode source position, so
@@ -405,7 +446,7 @@ func (s *Store) resolveOrCreate(ref EntityRef, projectID string, stats *ReplaySt
 	if existing != nil {
 		return existing, nil
 	}
-	created, err := s.CreateEntity(ref.Name, ref.Type, projectID)
+	created, err := s.createFromRef(ref, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("create missing entity %q (%s): %w", ref.Name, ref.Type, err)
 	}

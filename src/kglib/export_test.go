@@ -448,3 +448,127 @@ func TestImportAcceptsAnotherDatabasesJournal(t *testing.T) {
 		t.Errorf("applied = %d, want 1", stats.Applied)
 	}
 }
+
+// An export must carry the same stable ID hint a journal record does, or a
+// restored backup resolves on (name, type) — which is not unique. kg's own
+// graph has 55 colliding pairs, so this is the normal case, not an edge case.
+func TestExportCarriesStableIDsSoRestoreDoesNotMisattach(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	source, err := OpenStore(filepath.Join(tmpDir, "source.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	// Two same-named symbols with indexer-style ids, and a note on one of them.
+	mustCreateWithID(t, source, "function:cmd/main.go:Run", "Run", "function", "p")
+	mustCreateWithID(t, source, "function:auth/handler.go:Run", "Run", "function", "p")
+	if _, err := source.CreateObservation("function:auth/handler.go:Run", "rate-limits at 100rps", "p"); err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+
+	dumpPath := filepath.Join(tmpDir, "dump.jsonl")
+	exportToFile(t, source, "p", dumpPath)
+	source.Close()
+
+	target, err := OpenStore(filepath.Join(tmpDir, "target.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer target.Close()
+
+	stats, err := target.ImportRecords(dumpPath, "p")
+	if err != nil {
+		t.Fatalf("ImportRecords: %v", err)
+	}
+	if stats.Failed != 0 {
+		t.Fatalf("import failures: %v", stats.Errors)
+	}
+	if stats.Ambiguous != 0 {
+		t.Errorf("import resolved %d record(s) by guessing between same-named entities: %v",
+			stats.Ambiguous, stats.Ambiguities)
+	}
+
+	// The note is on the symbol it was written against.
+	right, err := target.GetObservations("function:auth/handler.go:Run", "p")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(right) != 1 || right[0].Content != "rate-limits at 100rps" {
+		t.Errorf("auth/handler.go:Run has %+v, want the restored note", right)
+	}
+	wrong, err := target.GetObservations("function:cmd/main.go:Run", "p")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(wrong) != 0 {
+		t.Errorf("restore attached the note to the wrong Run: %+v", wrong)
+	}
+}
+
+// A restored backup must rank the same way the original did, which means
+// visibility has to survive the round trip.
+func TestExportRoundTripPreservesVisibility(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	source, err := OpenStore(filepath.Join(tmpDir, "source.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	exported, err := source.CreateEntity("ExportedFunc", "function", "p")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := setVisibility(source, exported.ID, VisibilityPublic); err != nil {
+		t.Fatalf("setVisibility: %v", err)
+	}
+	unexported, err := source.CreateEntity("unexportedFunc", "function", "p")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := setVisibility(source, unexported.ID, VisibilityPrivate); err != nil {
+		t.Fatalf("setVisibility: %v", err)
+	}
+	// A hand-written entity has no source symbol and so no visibility.
+	if _, err := source.CreateEntity("retry-policy", "decision", "p"); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+
+	dumpPath := filepath.Join(tmpDir, "dump.jsonl")
+	exportToFile(t, source, "p", dumpPath)
+	source.Close()
+
+	target, err := OpenStore(filepath.Join(tmpDir, "target.db"), testSchemaConfig())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer target.Close()
+	if _, err := target.ImportRecords(dumpPath, "p"); err != nil {
+		t.Fatalf("ImportRecords: %v", err)
+	}
+
+	for _, tc := range []struct{ name, entityType, want string }{
+		{"ExportedFunc", "function", VisibilityPublic},
+		{"unexportedFunc", "function", VisibilityPrivate},
+		{"retry-policy", "decision", ""},
+	} {
+		got, err := target.GetEntityByNameAndType(tc.name, tc.entityType, "p")
+		if err != nil || got == nil {
+			t.Fatalf("%s not restored: %v", tc.name, err)
+		}
+		if got.Visibility != tc.want {
+			t.Errorf("%s visibility = %q after round trip, want %q", tc.name, got.Visibility, tc.want)
+		}
+	}
+
+	// And the restored graph filters the way the original would.
+	public, err := target.KeywordSearchFiltered("p", "Func", 10, SearchFilter{PublicOnly: true})
+	if err != nil {
+		t.Fatalf("KeywordSearchFiltered: %v", err)
+	}
+	for _, r := range public {
+		if r.Entity.Name == "unexportedFunc" {
+			t.Error("--public-only returned an unexported symbol after a restore: visibility was lost")
+		}
+	}
+}
