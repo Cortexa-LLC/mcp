@@ -90,6 +90,18 @@ every scope and the personal store in one pass, or to see what would happen.`,
 		checked := 0
 		rebuilt := 0
 
+		// unchecked counts everything this run could not account for: a scope
+		// list it could not read, a database whose format it could not
+		// determine, a rebuild that failed. It gates the summary, because the
+		// one thing this command must never do is print an all-clear for a
+		// database it never looked at — the user reads that as "my graphs are
+		// fine" and stops thinking about it.
+		unchecked := 0
+		failf := func(format string, args ...any) {
+			unchecked++
+			fmt.Fprintf(out, "⚠️  "+format+"\n", args...)
+		}
+
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
@@ -100,28 +112,41 @@ every scope and the personal store in one pass, or to see what would happen.`,
 		// Project scopes: rebuildable by re-indexing, so a mismatch is repaired
 		// by indexing rather than by replay alone.
 		scopes, err := determineScopesToIndex(aiDir, "", true)
-		if err == nil {
-			for _, scope := range scopes {
-				dbPath := aiDir + "/knowledge.db"
-				if scope != "" {
-					cfg, err := knowledge.LoadScopeConfig(aiDir, scope)
-					if err != nil {
-						fmt.Fprintf(out, "⚠️  scope %s: %v\n", scope, err)
-						continue
-					}
-					dbPath = aiDir + "/" + cfg.Database
-				}
-				checked++
-				status, _, err := kglib.CheckFormat(dbPath)
-				if err != nil || status != kglib.FormatMismatch {
-					continue
-				}
-				if err := indexScopeDB(root, aiDir, scope); err != nil {
-					fmt.Fprintf(out, "⚠️  scope %s: %v\n", scope, err)
-					continue
-				}
-				rebuilt++
+		if err != nil {
+			// Every project database lives behind this list, so failing to read
+			// it means none of them were examined.
+			failf("cannot enumerate scopes in %s, so no project database was checked: %v", aiDir, err)
+		}
+		for _, scope := range scopes {
+			label := scope
+			if label == "" {
+				label = "(default)"
 			}
+			dbPath := aiDir + "/knowledge.db"
+			if scope != "" {
+				cfg, err := knowledge.LoadScopeConfig(aiDir, scope)
+				if err != nil {
+					failf("scope %s: cannot read scope config, database not checked: %v", label, err)
+					continue
+				}
+				dbPath = aiDir + "/" + cfg.Database
+			}
+			status, _, err := kglib.CheckFormat(dbPath)
+			if err != nil {
+				failf("scope %s: cannot determine storage format of %s: %v", label, dbPath, err)
+				continue
+			}
+			// Counted only once the format is actually known: "checked" is a
+			// claim about evidence, not about how many paths were visited.
+			checked++
+			if status != kglib.FormatMismatch {
+				continue
+			}
+			if err := indexScopeDB(root, aiDir, scope); err != nil {
+				failf("scope %s: rebuild failed, %s is still unreadable: %v", label, dbPath, err)
+				continue
+			}
+			rebuilt++
 		}
 
 		// The personal store has no source tree; replay is the whole rebuild.
@@ -130,20 +155,27 @@ every scope and the personal store in one pass, or to see what would happen.`,
 			if err != nil {
 				return err
 			}
-			checked++
 			did, err := rebuildHandWritesOnly(dbPath, out)
-			if err != nil {
-				return fmt.Errorf("personal store: %w", err)
-			}
-			if did {
+			switch {
+			case err != nil:
+				failf("personal store: %v", err)
+			case did:
+				checked++
 				rebuilt++
+			default:
+				checked++
 			}
 		}
 
-		if rebuilt == 0 {
+		switch {
+		case unchecked > 0:
+			fmt.Fprintf(out, "❌ %d database(s) checked, %d rebuilt; %d could not be checked (see above).\n",
+				checked, rebuilt, unchecked)
+			return fmt.Errorf("%d database(s) could not be checked", unchecked)
+		case rebuilt == 0:
 			fmt.Fprintf(out, "✅ %d database(s) checked; all readable by this build (kuzu %s).\n",
 				checked, kglib.KuzuVersion())
-		} else {
+		default:
 			fmt.Fprintf(out, "✅ %d of %d database(s) rebuilt.\n", rebuilt, checked)
 		}
 		return nil
@@ -151,5 +183,9 @@ every scope and the personal store in one pass, or to see what would happen.`,
 }
 
 func init() {
+	// A database that could not be checked is an operational failure, not a
+	// misuse of the command; printing the usage text after it buries the
+	// warnings that say which database is at risk.
+	migrateCmd.SilenceUsage = true
 	rootCmd.AddCommand(migrateCmd)
 }

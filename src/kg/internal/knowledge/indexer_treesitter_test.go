@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -786,32 +787,42 @@ object Service {
 
 	// run() calls helper() directly and again inside the map lambda; both are
 	// attributed to run, and dedup collapses them to one edge.
+	//
+	// Endpoints are read by name and type rather than by entity ID: what is
+	// under test is which function the call is attributed to, and an assertion
+	// on the ID string fails whenever the ID scheme changes even though the
+	// attribution it claims to check is still right.
 	res, err := store.Query(`MATCH (a:Entity)-[:CALLS]->(b:Entity)
-		RETURN a.id, b.id ORDER BY a.id, b.id`)
+		RETURN a.name, a.type, b.name, b.type ORDER BY a.name, b.name`)
 	if err != nil {
 		t.Fatalf("query CALLS: %v", err)
 	}
 	defer res.Close()
 
-	var edges []string
+	var edges [][]string
 	for res.HasNext() {
 		row, err := res.Next()
 		if err != nil {
 			t.Fatalf("row: %v", err)
 		}
 		vals, _ := row.GetAsSlice()
-		edges = append(edges, fmt.Sprint(vals))
+		edge := make([]string, 0, len(vals))
+		for _, v := range vals {
+			str, _ := v.(string)
+			edge = append(edge, str)
+		}
+		edges = append(edges, edge)
 	}
 
-	want := "[function:Service.scala:run function:Service.scala:helper]"
-	found := false
+	want := []string{"run", EntityTypeFunction, "helper", EntityTypeFunction}
+	found := 0
 	for _, e := range edges {
-		if e == want {
-			found = true
+		if slices.Equal(e, want) {
+			found++
 		}
 	}
-	if !found {
-		t.Errorf("expected CALLS edge run -> helper, got %v", edges)
+	if found != 1 {
+		t.Errorf("CALLS edges = %v; want exactly one from function run to function helper (the direct call and the one inside the lambda are the same edge)", edges)
 	}
 }
 
