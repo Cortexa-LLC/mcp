@@ -72,7 +72,9 @@ This alone reduces re-exploration significantly.
 A knowledge graph for this project is available via the `kg` MCP server.
 
 **Search before you explore.** Before grepping or reading files, search the KG:
-- `kg__search_knowledge({query: "..."})` — find entities, components, prior findings
+- `kg__search_knowledge({query: "..."})` — find entities, components, prior findings.
+  Unexported symbols are included and rank below exported ones; add
+  `public_only: true` to see just a package's API surface.
 - `kg__get_file_context({file: "path/to/file"})` — see what's in a file before reading it
 - `kg__query_graph({cypher: "..."})` — trace dependencies and call chains
 

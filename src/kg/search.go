@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
+	"github.com/cortexa-llc/mcp/kglib"
 	"github.com/spf13/cobra"
 )
 
 var (
-	searchScopeName string
-	searchAll       bool
+	searchScopeName  string
+	searchAll        bool
+	searchPublicOnly bool
 )
 
 var searchCmd = &cobra.Command{
@@ -29,7 +31,11 @@ Examples:
   kg search "api endpoint" --scope team-a # Search team-a scope + layers
   kg search "database" --all              # Search all scopes
   kg search "retention" --personal          # Search the personal store only
-  kg search "retention" --with-personal     # This project's graph plus personal`,
+  kg search "retention" --with-personal     # This project's graph plus personal
+  kg search "handler" --public-only         # Only exported symbols
+
+Unexported symbols are indexed and searchable; they rank below equally-relevant
+exported ones. Use --public-only to see just a package's API surface.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if usePersonal && withPersonal {
@@ -201,14 +207,30 @@ func searchAllScopes(aiDir, projectID, query string) error {
 
 func printResults(results []*knowledge.SearchResult) {
 	for _, res := range results {
-		fmt.Printf("%s\t%s\t%s\n", res.Entity.ID, res.Entity.Type, res.Entity.Name)
+		if searchPublicOnly && res.Entity.Visibility == kglib.VisibilityPrivate {
+			continue
+		}
+		fmt.Printf("%s\t%s\t%s%s\n", res.Entity.ID, res.Entity.Type, res.Entity.Name,
+			visibilitySuffix(res.Entity.Visibility))
 	}
+}
+
+// visibilitySuffix marks unexported symbols in output. Only private is marked:
+// annotating everything would put a tag on every file and hand-written note,
+// where the concept does not apply.
+func visibilitySuffix(visibility string) string {
+	if visibility == kglib.VisibilityPrivate {
+		return "\t(unexported)"
+	}
+	return ""
 }
 
 func init() {
 	rootCmd.AddCommand(searchCmd)
 	searchCmd.Flags().StringVar(&searchScopeName, "scope", "", "Search a specific scope")
 	searchCmd.Flags().BoolVar(&searchAll, "all", false, "Search all scopes")
+	searchCmd.Flags().BoolVar(&searchPublicOnly, "public-only", false,
+		"Show only exported symbols, hiding unexported ones")
 	searchCmd.Flags().BoolVar(&withPersonal, "with-personal", false,
 		"Also search your personal knowledge store, ranked below project results")
 	registerPersonalFlag(searchCmd)

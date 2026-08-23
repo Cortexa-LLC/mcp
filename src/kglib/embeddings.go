@@ -71,7 +71,7 @@ func (s *Store) GetUnembeddedEntities(projectID string) ([]Entity, error) {
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id AND e.embedding IS NULL
-		RETURN e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		RETURN `+s.entityColumns()+`
 	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return nil, fmt.Errorf("query un-embedded entities: %w", err)

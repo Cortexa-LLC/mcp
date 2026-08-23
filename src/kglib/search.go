@@ -73,7 +73,7 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 		         MATCH (e)-[:HAS_OBSERVATION]->(o:Observation)
 		         WHERE %s
 		       })
-		RETURN DISTINCT e.id, e.name, e.type, e.project_id, e.created_at, e.updated_at
+		RETURN DISTINCT `+s.entityColumns()+`
 		ORDER BY e.updated_at DESC
 		LIMIT %d
 	`, nameClause, obsClause, limit)
@@ -98,15 +98,7 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 		}
 		tuple.Close()
 
-		entity := &Entity{
-			ID:        row[0].(string),
-			Name:      row[1].(string),
-			Type:      row[2].(string),
-			ProjectID: row[3].(string),
-		}
-
-		entity.CreatedAt = timeOrZero(row[4])
-		entity.UpdatedAt = timeOrZero(row[5])
+		entity := entityFromRow(row)
 
 		entities = append(entities, entity)
 	}
@@ -135,6 +127,8 @@ func (s *Store) KeywordSearch(projectID, query string, limit int) ([]*SearchResu
 			MatchType:    "keyword",
 		})
 	}
+
+	rankResults(results)
 
 	return results, nil
 }
@@ -323,6 +317,7 @@ func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit i
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
+	rankResults(results)
 
 	return results, nil
 }
@@ -409,9 +404,7 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 	}
 
 	// Sort by score descending
-	sort.Slice(hybridResults, func(i, j int) bool {
-		return hybridResults[i].Score > hybridResults[j].Score
-	})
+	rankResults(hybridResults)
 
 	// Limit results
 	if len(hybridResults) > config.Limit {
@@ -419,6 +412,40 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 	}
 
 	return hybridResults, nil
+}
+
+// rankResults orders search results: relevance first, then visibility.
+//
+// One comparator rather than a score sort followed by a visibility pass. A
+// second pass keyed only on visibility does not break ties — it overrides the
+// score entirely, sinking a strong unexported match below a weak exported one.
+//
+// The visibility term is a tie-break rather than a filter: filtering to
+// exported-only would hide an entire `package main` command layer, where
+// nothing can be exported because nothing can import it, which is the case that
+// motivated recording visibility at all.
+//
+// Only VisibilityPrivate is demoted. Empty visibility ranks alongside public
+// rather than between the two: it covers files, markdown topics and
+// hand-written knowledge, and hand-written knowledge is the last thing that
+// should sink below an exported getter.
+//
+// Stable, so orderings the caller established and this does not speak to —
+// recency for keyword search, where every score is 1.0 — survive intact.
+func rankResults(results []*SearchResult) {
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		return visibilityRank(results[i]) < visibilityRank(results[j])
+	})
+}
+
+func visibilityRank(r *SearchResult) int {
+	if r.Entity != nil && r.Entity.Visibility == VisibilityPrivate {
+		return 1
+	}
+	return 0
 }
 
 // calculateRecencyScore computes a recency boost based on entity update time
