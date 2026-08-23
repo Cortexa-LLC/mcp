@@ -1,11 +1,14 @@
 package knowledge
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/cortexa-llc/mcp/kg/internal/mcp"
+	"github.com/cortexa-llc/mcp/kglib"
 )
 
 // newPersonalStore creates a personal store and returns its path.
@@ -275,5 +278,48 @@ func TestSearchPersonalKnowledge_ScopedToPersonalProjectID(t *testing.T) {
 		if r.Entity.ProjectID != "personal" {
 			t.Errorf("leaked an entity scoped to %q", r.Entity.ProjectID)
 		}
+	}
+}
+
+// Everything in the personal store is hand-written — there is no repository to
+// rebuild it from — so an entry recorded through MCP must also land in the
+// journal that survives a Kuzu storage-format upgrade.
+func TestAddPersonalKnowledge_IsJournaled(t *testing.T) {
+	dbPath := newPersonalStore(t)
+	cfg := PersonalConfig{DBPath: dbPath, ProjectID: "personal", AllowWrites: true}
+	_, handlers := personalTools(cfg)
+
+	if _, err := call(t, handlers, "add_personal_knowledge", map[string]interface{}{
+		"title":        "kafka-retention",
+		"type":         "decision",
+		"content":      "7-day retention on events: replay window beats storage cost.",
+		"user_request": "remember this decision in my personal knowledge",
+	}); err != nil {
+		t.Fatalf("add_personal_knowledge: %v", err)
+	}
+
+	raw, err := os.ReadFile(kglib.JournalPath(dbPath))
+	if err != nil {
+		t.Fatalf("personal MCP write was not journaled: %v", err)
+	}
+
+	// The entity plus both observations (content and provenance).
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 journal records, got %d:\n%s", len(lines), raw)
+	}
+
+	var rec kglib.JournalRecord
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatalf("decode journal record: %v", err)
+	}
+	if rec.Op != kglib.OpCreateEntity || rec.Entity == nil || rec.Entity.Name != "kafka-retention" {
+		t.Errorf("first record = %+v, want a create of kafka-retention", rec)
+	}
+	if rec.ProjectID != "personal" {
+		t.Errorf("record project = %q, want personal", rec.ProjectID)
+	}
+	if !strings.Contains(string(raw), "7-day retention") {
+		t.Error("the entry's content is missing from the journal, so it would not survive a rebuild")
 	}
 }

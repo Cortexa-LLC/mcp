@@ -8,3 +8,7 @@ build/
 # in a server directory names its output after the directory.
 /src/kg/kg
 /src/markitdown/markitdown-mcp
+
+# kg's own knowledge graph for this repo: a Kuzu database plus the hand-write
+# journal beside it. Rebuilt from source with `kg index`, so it is never shared.
+.ai/

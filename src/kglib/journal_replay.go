@@ -1,0 +1,335 @@
+package kglib
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+)
+
+// Journal replay.
+//
+// Replay is what makes the journal worth writing: after a storage-format bump
+// the new binary creates an empty database and walks the JSONL file, re-issuing
+// every hand-write against whatever entity IDs the new database hands out.
+//
+// Two properties matter more than speed here (journals are small — hand-writes
+// are rare by construction):
+//
+//   - Idempotent. A rebuild can be interrupted and retried, and for an indexed
+//     graph the re-index may already have recreated some of the entities the
+//     journal names. Replaying a record that is already reflected in the
+//     database is a skip, not a duplicate and not an error.
+//   - Lossless. A record whose entity is missing gets that entity created from
+//     the reference rather than being dropped. Hand-written knowledge has no
+//     other copy; inventing a bare entity to hang an observation on loses less
+//     than discarding the observation.
+//
+// A single unreadable line does not abort the replay. Corruption in one record
+// should cost that record, not every record after it, so failures are counted
+// and reported at the end.
+
+// ReplayStats summarises what a replay did.
+type ReplayStats struct {
+	Records  int // lines read
+	Applied  int // records that changed the database
+	Skipped  int // records already reflected in the database
+	Failed   int // records that could not be applied
+	Errors   []error
+	Implicit int // entities created to host a record whose target was missing
+}
+
+// maxReplayErrors bounds how many individual failures are retained. The count
+// stays exact; only the detail is capped, so a wholly corrupt journal reports
+// its scale without accumulating a million errors in memory.
+const maxReplayErrors = 20
+
+func (r *ReplayStats) fail(err error) {
+	r.Failed++
+	if len(r.Errors) < maxReplayErrors {
+		r.Errors = append(r.Errors, err)
+	}
+}
+
+// ReplayJournal applies this database's own journal after a rebuild.
+//
+// Journaling is suspended for the duration: the records being applied are
+// already in a journal, and recording them again would double the file on every
+// rebuild. The prior setting is restored before returning.
+//
+// A missing journal file is not an error — a database that has only ever been
+// indexed has nothing hand-written to replay.
+func (s *Store) ReplayJournal(path string) (ReplayStats, error) {
+	return s.replay(path, false)
+}
+
+func (s *Store) replay(path string, keepJournaling bool) (ReplayStats, error) {
+	var stats ReplayStats
+
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return stats, nil
+	}
+	if err != nil {
+		return stats, fmt.Errorf("open journal %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if !keepJournaling {
+		s.mu.Lock()
+		saved := s.journal
+		s.journal = nil
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			s.journal = saved
+			s.mu.Unlock()
+		}()
+	}
+
+	scanner := bufio.NewScanner(f)
+	// Observation content can be long — the design caps personal entries in the
+	// kilobytes, but a CLI-written observation has no such limit. Give the
+	// scanner room rather than failing a replay on a long line.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
+	line := 0
+	for scanner.Scan() {
+		line++
+		raw := scanner.Bytes()
+		if len(raw) == 0 {
+			continue
+		}
+		stats.Records++
+
+		var rec JournalRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			stats.fail(fmt.Errorf("line %d: parse: %w", line, err))
+			continue
+		}
+		if rec.Version > JournalVersion {
+			stats.fail(fmt.Errorf("line %d: journal version %d is newer than this build understands (%d)",
+				line, rec.Version, JournalVersion))
+			continue
+		}
+		if err := s.applyRecord(rec, &stats); err != nil {
+			stats.fail(fmt.Errorf("line %d (%s): %w", line, rec.Op, err))
+		}
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
+		return stats, fmt.Errorf("read journal %s: %w", path, err)
+	}
+
+	return stats, nil
+}
+
+// applyRecord replays one record. It reports an error only for that record;
+// the caller keeps going.
+func (s *Store) applyRecord(rec JournalRecord, stats *ReplayStats) error {
+	switch rec.Op {
+	case OpCreateEntity:
+		if rec.Entity == nil {
+			return errors.New("record has no entity")
+		}
+		existing, err := s.GetEntityByNameAndType(rec.Entity.Name, rec.Entity.Type, rec.ProjectID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			stats.Skipped++
+			return nil
+		}
+		if _, err := s.CreateEntity(rec.Entity.Name, rec.Entity.Type, rec.ProjectID); err != nil {
+			return err
+		}
+		stats.Applied++
+		return nil
+
+	case OpDeleteEntity:
+		if rec.Entity == nil {
+			return errors.New("record has no entity")
+		}
+		existing, err := s.GetEntityByNameAndType(rec.Entity.Name, rec.Entity.Type, rec.ProjectID)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			stats.Skipped++
+			return nil
+		}
+		if err := s.DeleteEntity(existing.ID, rec.ProjectID); err != nil {
+			return err
+		}
+		stats.Applied++
+		return nil
+
+	case OpCreateObservation:
+		if rec.Entity == nil {
+			return errors.New("record has no entity")
+		}
+		entity, err := s.resolveOrCreate(*rec.Entity, rec.ProjectID, stats)
+		if err != nil {
+			return err
+		}
+		dup, err := s.hasObservation(entity.ID, rec.ProjectID, rec.Content)
+		if err != nil {
+			return err
+		}
+		if dup {
+			stats.Skipped++
+			return nil
+		}
+		if _, err := s.CreateObservation(entity.ID, rec.Content, rec.ProjectID); err != nil {
+			return err
+		}
+		stats.Applied++
+		return nil
+
+	case OpDeleteObservation:
+		if rec.Entity == nil {
+			return errors.New("record has no entity")
+		}
+		entity, err := s.GetEntityByNameAndType(rec.Entity.Name, rec.Entity.Type, rec.ProjectID)
+		if err != nil {
+			return err
+		}
+		if entity == nil {
+			stats.Skipped++
+			return nil
+		}
+		observations, err := s.GetObservations(entity.ID, rec.ProjectID)
+		if err != nil {
+			return err
+		}
+		for _, o := range observations {
+			if o.Content == rec.Content {
+				if err := s.DeleteObservation(o.ID, entity.ID, rec.ProjectID); err != nil {
+					return err
+				}
+				stats.Applied++
+				return nil
+			}
+		}
+		stats.Skipped++
+		return nil
+
+	case OpCreateRelation:
+		from, to, err := s.resolveEnds(rec, stats, true)
+		if err != nil {
+			return err
+		}
+		// CreateRelation is not idempotent — Kuzu will happily store the same
+		// edge twice — so an existing edge has to be detected before writing.
+		dup, err := s.hasRelation(from.ID, to.ID, rec.RelType, rec.ProjectID)
+		if err != nil {
+			return err
+		}
+		if dup {
+			stats.Skipped++
+			return nil
+		}
+		if err := s.CreateRelation(from.ID, to.ID, rec.RelType, rec.ProjectID); err != nil {
+			return err
+		}
+		stats.Applied++
+		return nil
+
+	case OpDeleteRelation:
+		from, to, err := s.resolveEnds(rec, stats, false)
+		if err != nil {
+			return err
+		}
+		if from == nil || to == nil {
+			stats.Skipped++
+			return nil
+		}
+		if err := s.DeleteRelation(from.ID, to.ID, rec.RelType, rec.ProjectID); err != nil {
+			return err
+		}
+		stats.Applied++
+		return nil
+
+	default:
+		return fmt.Errorf("unknown op %q", rec.Op)
+	}
+}
+
+// resolveEnds looks up both ends of a relation record. With create set, missing
+// endpoints are created so the edge survives; without it, a missing endpoint
+// yields nil and the caller skips (there is nothing to delete).
+func (s *Store) resolveEnds(rec JournalRecord, stats *ReplayStats, create bool) (*Entity, *Entity, error) {
+	if rec.From == nil || rec.To == nil {
+		return nil, nil, errors.New("relation record is missing an endpoint")
+	}
+	if create {
+		from, err := s.resolveOrCreate(*rec.From, rec.ProjectID, stats)
+		if err != nil {
+			return nil, nil, err
+		}
+		to, err := s.resolveOrCreate(*rec.To, rec.ProjectID, stats)
+		if err != nil {
+			return nil, nil, err
+		}
+		return from, to, nil
+	}
+	from, err := s.GetEntityByNameAndType(rec.From.Name, rec.From.Type, rec.ProjectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	to, err := s.GetEntityByNameAndType(rec.To.Name, rec.To.Type, rec.ProjectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return from, to, nil
+}
+
+// resolveOrCreate finds the entity a record hangs off, creating a bare one if
+// the graph no longer holds it. See the "lossless" note at the top of the file.
+func (s *Store) resolveOrCreate(ref EntityRef, projectID string, stats *ReplayStats) (*Entity, error) {
+	existing, err := s.GetEntityByNameAndType(ref.Name, ref.Type, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+	created, err := s.CreateEntity(ref.Name, ref.Type, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("create missing entity %q (%s): %w", ref.Name, ref.Type, err)
+	}
+	stats.Implicit++
+	return created, nil
+}
+
+// hasObservation reports whether an entity already carries this exact content.
+func (s *Store) hasObservation(entityID, projectID, content string) (bool, error) {
+	observations, err := s.GetObservations(entityID, projectID)
+	if err != nil {
+		return false, err
+	}
+	for _, o := range observations {
+		if o.Content == content {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// hasRelation reports whether the edge already exists.
+func (s *Store) hasRelation(fromID, toID, relType, projectID string) (bool, error) {
+	if err := s.validateRelType(relType); err != nil {
+		return false, err
+	}
+	relations, err := s.GetRelations(fromID, projectID)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range relations {
+		if r.ToID == toID && r.Type == relType {
+			return true, nil
+		}
+	}
+	return false, nil
+}

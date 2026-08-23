@@ -209,7 +209,23 @@ func init() {
 // openTarget resolves which store a command should act on. With --personal it is
 // the personal store; otherwise the named scope, or the project's default scope
 // when the flag is empty.
+//
+// Every command routed through here is a hand-write (add, link), so a write-mode
+// open turns on journaling: this is the knowledge that has no source to be
+// rebuilt from after a storage-format upgrade. Indexing opens its store through
+// openStore instead and is deliberately left unjournaled.
 func openTarget(readOnly bool, scopeFlag string) (*knowledge.Store, string, error) {
+	store, projectID, err := openTargetStore(readOnly, scopeFlag)
+	if err != nil {
+		return nil, "", err
+	}
+	if !readOnly {
+		store.EnableJournal()
+	}
+	return store, projectID, nil
+}
+
+func openTargetStore(readOnly bool, scopeFlag string) (*knowledge.Store, string, error) {
 	if usePersonal {
 		return openPersonalStore(readOnly)
 	}
@@ -331,6 +347,11 @@ var personalForgetCmd = &cobra.Command{
 			return err
 		}
 		defer store.Close()
+
+		// Journal the removal. Without it the next storage-format rebuild would
+		// replay the entry's creation and resurrect something the user asked to
+		// be forgotten.
+		store.EnableJournal()
 
 		// Report what is being removed, so an accidental ID is obvious.
 		entity, err := store.GetEntity(args[0], projectID)
