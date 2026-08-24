@@ -136,6 +136,12 @@ func TestReindexRemovesLegacyUUIDPDFEntities(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(srcDir, "doc.pdf"), pdfBytes, 0o644); err != nil {
 		t.Fatalf("write PDF: %v", err)
 	}
+	// Uppercase extension: the walker dispatches on the lowercased extension
+	// but keeps the path's case, so the cleanup's name filter must be
+	// case-insensitive too or this legacy row escapes forever.
+	if err := os.WriteFile(filepath.Join(srcDir, "REPORT.PDF"), pdfBytes, 0o644); err != nil {
+		t.Fatalf("write PDF: %v", err)
+	}
 
 	store, err := OpenStore(filepath.Join(tmpDir, "test.db"))
 	if err != nil {
@@ -151,6 +157,10 @@ func TestReindexRemovesLegacyUUIDPDFEntities(t *testing.T) {
 	}
 	if _, err := store.CreateObservation(legacy.ID, "stale chunk from the old indexer", selectiveClearProject); err != nil {
 		t.Fatalf("CreateObservation legacy: %v", err)
+	}
+	legacyUpper, err := store.CreateEntity("REPORT.PDF", EntityTypeFile, selectiveClearProject)
+	if err != nil {
+		t.Fatalf("CreateEntity legacy uppercase: %v", err)
 	}
 	// A hand-written file-typed note about a PDF that is NOT in the tree —
 	// no indexed counterpart, so it must survive.
@@ -177,6 +187,12 @@ func TestReindexRemovesLegacyUUIDPDFEntities(t *testing.T) {
 	}
 	if obs, err := store.GetObservations(legacy.ID, selectiveClearProject); err == nil && len(obs) != 0 {
 		t.Errorf("legacy PDF observations survived: %d, want 0", len(obs))
+	}
+	if _, err := store.GetEntity("file:REPORT.PDF", selectiveClearProject); err != nil {
+		t.Fatalf("indexed uppercase PDF entity missing: %v", err)
+	}
+	if _, err := store.GetEntity(legacyUpper.ID, selectiveClearProject); err == nil {
+		t.Error("legacy UUID PDF entity with uppercase extension survived the re-index")
 	}
 	// …and the unshadowed hand-written note is untouched.
 	if _, err := store.GetEntity(handNote.ID, selectiveClearProject); err != nil {

@@ -306,7 +306,7 @@ func (idx *Indexer) clearCodeDerivedData() error {
 func (idx *Indexer) cleanupLegacyPDFEntities() error {
 	result, err := idx.store.QueryParams(fmt.Sprintf(`
 		MATCH (e:Entity {project_id: $project_id})
-		WHERE e.type = '%s' AND NOT %s AND e.name ENDS WITH '.pdf'
+		WHERE e.type = '%s' AND NOT %s AND lower(e.name) ENDS WITH '.pdf'
 		RETURN e.id, e.name
 	`, EntityTypeFile, codeDerivedIDClause("e")), map[string]any{"project_id": idx.projectID})
 	if err != nil {
