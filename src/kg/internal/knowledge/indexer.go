@@ -241,6 +241,12 @@ func (idx *Indexer) clearCodeDerivedData() error {
 	// see deleteProjectRelations), restricted to edges with at least one
 	// code-derived endpoint. Edges between two hand-written entities are
 	// knowledge, not derivation, and stay.
+	//
+	// Strictly, the DETACH DELETE below subsumes this sweep — every edge it
+	// deletes touches a code-derived endpoint that DETACH DELETE would take
+	// down anyway. It is kept as its own step deliberately, mirroring
+	// clearProjectData: relation deletion stays explicit and catalog-driven
+	// rather than an implicit side effect of node deletion.
 	relTypes, err := idx.relationTablesFromCatalog()
 	if err != nil {
 		return err
@@ -281,6 +287,84 @@ func (idx *Indexer) clearCodeDerivedData() error {
 	}
 	result.Close()
 
+	return nil
+}
+
+// cleanupLegacyPDFEntities removes duplicates left behind by the pre-0.2 PDF
+// indexer, which minted UUID ids for its file entities. Under selective
+// clearing a UUID id reads as hand-written, so those rows would survive every
+// re-index while the current indexer recreates the same document as
+// file:<relPath> — a duplicate entity with a second copy of every chunk
+// observation, and nothing short of --wipe would ever remove it.
+//
+// It runs after indexing, because a legacy row is recognised conservatively as
+// a shadow of what this run just built: type "file", a non-code-derived id, a
+// .pdf name, AND a freshly indexed entity of the same name. A hand-written
+// file-typed entity keeps its protection unless it duplicates an indexed PDF
+// by exact name — at which point it is, definitionally, the duplicate this
+// cleanup exists to remove.
+func (idx *Indexer) cleanupLegacyPDFEntities() error {
+	result, err := idx.store.QueryParams(fmt.Sprintf(`
+		MATCH (e:Entity {project_id: $project_id})
+		WHERE e.type = '%s' AND NOT %s AND e.name ENDS WITH '.pdf'
+		RETURN e.id, e.name
+	`, EntityTypeFile, codeDerivedIDClause("e")), map[string]any{"project_id": idx.projectID})
+	if err != nil {
+		return fmt.Errorf("find legacy pdf entities: %w", err)
+	}
+	type legacyRow struct{ id, name string }
+	var candidates []legacyRow
+	for result.HasNext() {
+		row, err := result.Next()
+		if err != nil {
+			result.Close()
+			return fmt.Errorf("find legacy pdf entities: %w", err)
+		}
+		idVal, _ := row.GetValue(0)
+		nameVal, _ := row.GetValue(1)
+		id, _ := idVal.(string)
+		name, _ := nameVal.(string)
+		if id != "" && name != "" {
+			candidates = append(candidates, legacyRow{id: id, name: name})
+		}
+	}
+	result.Close()
+
+	removed := 0
+	for _, c := range candidates {
+		// Only rows shadowed by a just-indexed counterpart are duplicates; a
+		// hand-written note about a PDF this run did not index stays.
+		shadowed, err := countQuery(idx.store, `
+			MATCH (e:Entity {project_id: $project_id, id: $id})
+			RETURN count(*)
+		`, map[string]any{"project_id": idx.projectID, "id": "file:" + c.name})
+		if err != nil {
+			return fmt.Errorf("check legacy pdf counterpart for %q: %w", c.name, err)
+		}
+		if shadowed == 0 {
+			continue
+		}
+		res, err := idx.store.QueryParams(`
+			MATCH (e:Entity {project_id: $project_id, id: $id})-[r:HAS_OBSERVATION]->(o:Observation)
+			DELETE r, o
+		`, map[string]any{"project_id": idx.projectID, "id": c.id})
+		if err != nil {
+			return fmt.Errorf("delete legacy pdf observations for %q: %w", c.name, err)
+		}
+		res.Close()
+		res, err = idx.store.QueryParams(`
+			MATCH (e:Entity {project_id: $project_id, id: $id})
+			DETACH DELETE e
+		`, map[string]any{"project_id": idx.projectID, "id": c.id})
+		if err != nil {
+			return fmt.Errorf("delete legacy pdf entity %q: %w", c.name, err)
+		}
+		res.Close()
+		removed++
+	}
+	if removed > 0 {
+		fmt.Printf("   Removed %d legacy UUID-id PDF entities superseded by this index\n", removed)
+	}
 	return nil
 }
 
@@ -473,6 +557,15 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 	// Batch create observations (PDF text chunks, etc.)
 	if err := idx.batchCreateObservations(observations); err != nil {
 		return nil, fmt.Errorf("batch create observations: %w", err)
+	}
+
+	// One-time upgrade path: databases indexed before PDF entities carried
+	// source-derived ids hold UUID duplicates the selective clear preserves.
+	// A wipe already removed them.
+	if !idx.wipe {
+		if err := idx.cleanupLegacyPDFEntities(); err != nil {
+			return nil, fmt.Errorf("cleanup legacy pdf entities: %w", err)
+		}
 	}
 
 	return stats, nil

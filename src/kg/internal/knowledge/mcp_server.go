@@ -266,13 +266,13 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 					return nil, fmt.Errorf("index project: %w", err)
 				}
 
-				// Indexing opens by clearing every row carrying this project ID,
-				// which takes hand-written entities with it — they carry the same
-				// ID. Replaying the journal afterwards is what makes add_entity
-				// durable against index_project, exactly as it does for the CLI.
-				// Without this an agent recording a decision and then re-indexing,
-				// which this tool's own description tells it to do, destroys the
-				// decision and is told the index succeeded.
+				// Indexing clears only code-derived rows by default, so
+				// hand-written entities survive in place — but the selective
+				// clear still deletes hand→code relations with their code-derived
+				// endpoint, and the journal is what restores them once the
+				// re-index recreates the endpoint. Replaying it afterwards, as
+				// the CLI does, keeps add_entity durable against index_project
+				// in every mode, wipes and format migrations included.
 				replay, replayErr := s.ReplayJournal(kglib.JournalPath(dbPath))
 
 				msg := fmt.Sprintf("Indexed %d files, created %d entities and %d relations in project '%s'",
