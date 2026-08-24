@@ -121,9 +121,11 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 	return nil
 }
 
-// resolveHealthDB resolves the database path the same way `kg stats` does:
-// explicit scope, else the default scope, else the legacy knowledge.db.
-// Returns the path and the scope name actually used ("" for legacy).
+// resolveHealthDB resolves the database path: explicit scope, else the
+// default scope, else the legacy knowledge.db. Returns the path and the scope
+// name actually used ("" for legacy). This mirrors `kg stats` with one
+// deliberate divergence: stats silently falls back to the legacy database
+// when a named scope cannot be loaded, health errors (see below).
 // A named scope that cannot be loaded is an error, never a silent fallback —
 // reporting the legacy database's health under a scope the user asked for
 // would be a wrong answer, not a degraded one.
