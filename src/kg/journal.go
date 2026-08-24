@@ -18,13 +18,14 @@ import (
 // restoreHandWrites replays the hand-write journal into a store.
 //
 // This runs after indexing, never before, for a reason that is easy to get
-// backwards: Indexer.Index begins by calling clearProjectData, which deletes
-// every entity, observation, and relation belonging to the project — including
-// hand-written ones, which share the project ID. Replaying first would put the
-// journal's contents in exactly the place indexing is about to erase.
+// backwards: Indexer.Index begins with a clear — of everything the project
+// holds under --wipe (clearProjectData), of the code-derived portion otherwise
+// (clearCodeDerivedData, which also takes hand-written links to code entities
+// down with their endpoints). Replaying first would put the journal's contents
+// in exactly the place indexing is about to erase.
 //
 // Running it after every index, not only after a format migration, is what
-// makes `kg add entity` durable against `kg index` at all.
+// makes `kg add entity` durable against `kg index --wipe` at all.
 //
 // journalSrc is the journal to read: the archived one when a migration just
 // moved it aside, otherwise the database's own.

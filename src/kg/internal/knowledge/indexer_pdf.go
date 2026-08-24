@@ -143,9 +143,12 @@ func (idx *Indexer) processPDFFile(
 
 	// --- Create the "file" entity for this PDF ---------------------------------
 	now := time.Now().UTC()
-	entityID := uuid.NewString()
+	// Source-derived ID like every other file entity: a re-index recognises it
+	// as code-derived (codeDerivedIDPrefixes) and clears it before rebuilding.
+	// A UUID here would make the entity immortal — and duplicated on every run.
+	entityID := fmt.Sprintf("file:%s", relPath)
 
-	if !writeEntity(entities, seenEntities, entityID, relPath, "file", idx.projectID, now) {
+	if !writeEntity(entities, seenEntities, entityID, relPath, EntityTypeFile, idx.projectID, now) {
 		// Already seen – shouldn't happen in a fresh walk but handle gracefully.
 		return nil
 	}
