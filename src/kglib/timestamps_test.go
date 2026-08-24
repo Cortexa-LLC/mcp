@@ -116,6 +116,81 @@ func TestObservationAndTraversalTimestamps_SurviveRoundTrip(t *testing.T) {
 	}
 }
 
+// assertRecent fails unless ts falls inside the window that started just
+// before the fixture was created. "Non-zero" alone would accept a scan that
+// invents a wrong-but-present value; a freshly written row must read back as
+// written seconds ago.
+func assertRecent(t *testing.T, what string, ts time.Time, notBefore time.Time) {
+	t.Helper()
+	if ts.IsZero() {
+		t.Errorf("%s is the zero time — the read path dropped the stored timestamp", what)
+		return
+	}
+	if ts.Before(notBefore) || ts.After(time.Now().UTC().Add(time.Minute)) {
+		t.Errorf("%s = %v, want within the last minute (not before %v)", what, ts, notBefore)
+	}
+}
+
+// A row written moments ago must read back with a CreatedAt inside the last
+// minute on EVERY retrieval path an agent uses: the direct gets and the
+// keyword search that feeds search_knowledge — including the observations
+// attached to each search result, which come through batchGetObservations.
+// Against the old int64 scan every one of these read as the zero time.
+func TestFreshWritesReadBackRecentOnGetAndSearchPaths(t *testing.T) {
+	store := setupTestStore(t)
+	defer store.Close()
+
+	notBefore := time.Now().UTC().Add(-time.Minute)
+
+	entity, err := store.CreateEntity("freshTimestampProbe", "function", "proj")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err := store.CreateObservation(entity.ID, "freshTimestampProbe observation", "proj"); err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+
+	// Direct get paths.
+	got, err := store.GetEntity(entity.ID, "proj")
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	assertRecent(t, "GetEntity CreatedAt", got.CreatedAt, notBefore)
+	assertRecent(t, "GetEntity UpdatedAt", got.UpdatedAt, notBefore)
+
+	observations, err := store.GetObservations(entity.ID, "proj")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(observations) == 0 {
+		t.Fatal("no observations returned")
+	}
+	for _, o := range observations {
+		assertRecent(t, "GetObservations CreatedAt", o.CreatedAt, notBefore)
+	}
+
+	// Search path — the one search_knowledge serves.
+	results, err := store.KeywordSearch("proj", "freshTimestampProbe", 10)
+	if err != nil {
+		t.Fatalf("KeywordSearch: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected a search hit")
+	}
+	sawObservation := false
+	for _, r := range results {
+		assertRecent(t, "search result entity CreatedAt", r.Entity.CreatedAt, notBefore)
+		assertRecent(t, "search result entity UpdatedAt", r.Entity.UpdatedAt, notBefore)
+		for _, o := range r.Observations {
+			sawObservation = true
+			assertRecent(t, "search result observation CreatedAt", o.CreatedAt, notBefore)
+		}
+	}
+	if !sawObservation {
+		t.Fatal("search results carried no observations — the observation-timestamp path was not exercised")
+	}
+}
+
 // Search results must carry timestamps, otherwise the recency weight in
 // SearchConfig has no effect on ranking.
 func TestSearchResults_CarryTimestampsForRecencyScoring(t *testing.T) {

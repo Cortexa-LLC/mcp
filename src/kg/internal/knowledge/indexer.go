@@ -40,6 +40,7 @@ type Indexer struct {
 	root        string
 	ignorer     *gitignore.GitIgnore
 	scopeFilter *ScopeConfig // Optional scope filter for multi-DB indexing
+	wipe        bool         // clear ALL project data before indexing, not just code-derived; see SetWipe
 }
 
 // IndexStats tracks indexing progress
@@ -133,6 +134,14 @@ func (idx *Indexer) SetScopeFilter(scope *ScopeConfig) {
 	idx.scopeFilter = scope
 }
 
+// SetWipe makes Index clear every entity, observation, and relation of the
+// project before rebuilding — including hand-written knowledge, which by
+// default survives a re-index (see clearCodeDerivedData). After a wipe, only
+// the journal can bring hand-writes back, and only the ones it holds.
+func (idx *Indexer) SetWipe(wipe bool) {
+	idx.wipe = wipe
+}
+
 // readLinesFromFile reads all lines from a file
 func readLinesFromFile(path string) []string {
 	content, err := os.ReadFile(path)
@@ -216,6 +225,65 @@ func (idx *Indexer) deleteProjectRelations() error {
 	return nil
 }
 
+// clearCodeDerivedData removes the entities the indexers created — recognised
+// by their source-derived IDs (codeDerivedIDPrefixes) — together with their
+// observations and every relation touching them, so the index can be rebuilt
+// from the tree. Hand-written knowledge (UUID IDs: `kg add`, MCP add_entity,
+// and the observations and relations hanging off those entities) is left in
+// place: the tree cannot rebuild it, so a rebuild must not delete it.
+//
+// A relation between a surviving hand-written entity and a code-derived one is
+// deleted with the code-derived endpoint (DETACH DELETE): the edge would
+// otherwise dangle. If the journal holds that link, replay restores it once
+// the re-index has recreated the code entity under the same source-derived ID.
+func (idx *Indexer) clearCodeDerivedData() error {
+	// Relation sweep over every table in the catalog (retired ones included —
+	// see deleteProjectRelations), restricted to edges with at least one
+	// code-derived endpoint. Edges between two hand-written entities are
+	// knowledge, not derivation, and stay.
+	relTypes, err := idx.relationTablesFromCatalog()
+	if err != nil {
+		return err
+	}
+	for _, relType := range relTypes {
+		query := fmt.Sprintf(`
+			MATCH (from:Entity {project_id: $project_id})-[r:%s]->(to:Entity {project_id: $project_id})
+			WHERE %s OR %s
+			DELETE r
+		`, relType, codeDerivedIDClause("from"), codeDerivedIDClause("to")) // relType is a catalog table name, not user input — safe to interpolate
+		result, err := idx.store.QueryParams(query, map[string]any{"project_id": idx.projectID})
+		if err != nil {
+			return fmt.Errorf("delete %s relations: %w", relType, err)
+		}
+		result.Close()
+	}
+
+	// Observations of code-derived entities, plus the edges to them. Deleting
+	// the entity alone would leave the Observation nodes orphaned.
+	result, err := idx.store.QueryParams(fmt.Sprintf(`
+		MATCH (e:Entity {project_id: $project_id})-[r:HAS_OBSERVATION]->(o:Observation)
+		WHERE %s
+		DELETE r, o
+	`, codeDerivedIDClause("e")), map[string]any{"project_id": idx.projectID})
+	if err != nil {
+		return fmt.Errorf("delete observations: %w", err)
+	}
+	result.Close()
+
+	// The code-derived entities themselves (DETACH DELETE handles any remaining edges).
+	result, err = idx.store.QueryParams(fmt.Sprintf(`
+		MATCH (e:Entity {project_id: $project_id})
+		WHERE %s
+		DETACH DELETE e
+	`, codeDerivedIDClause("e")), map[string]any{"project_id": idx.projectID})
+	if err != nil {
+		return fmt.Errorf("delete entities: %w", err)
+	}
+	result.Close()
+
+	return nil
+}
+
 // clearProjectData removes all entities, their observations, and all relations
 // for this project so the index can be rebuilt from scratch.
 func (idx *Indexer) clearProjectData() error {
@@ -250,9 +318,15 @@ func (idx *Indexer) clearProjectData() error {
 func (idx *Indexer) Index() (*IndexStats, error) {
 	stats := &IndexStats{}
 
-	// Clear existing data for this project (rebuild from scratch)
-	if err := idx.clearProjectData(); err != nil {
-		return nil, fmt.Errorf("clear existing data: %w", err)
+	// Clear the data this run is about to rebuild. By default that is only the
+	// code-derived portion; --wipe restores the historical clear-everything
+	// behaviour, hand-written knowledge included.
+	if idx.wipe {
+		if err := idx.clearProjectData(); err != nil {
+			return nil, fmt.Errorf("clear existing data: %w", err)
+		}
+	} else if err := idx.clearCodeDerivedData(); err != nil {
+		return nil, fmt.Errorf("clear code-derived data: %w", err)
 	}
 
 	// Collect entities, relations, and observations in memory; insert via

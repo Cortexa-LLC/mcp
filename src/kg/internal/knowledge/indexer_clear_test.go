@@ -123,11 +123,15 @@ func TestRelationSweepClearsRetiredRelationTables(t *testing.T) {
 	}
 }
 
-// A re-index rebuilds the graph from the source tree, so what the source tree
-// no longer supports must not survive it — including edges in a relation table
-// that a previous version of the schema created and this one no longer lists.
-// Those edges have no source behind them and nothing else will ever remove
-// them, so a graph that keeps them disagrees with the tree permanently.
+// A wiping re-index rebuilds the graph from the source tree alone, so nothing
+// must survive it — including edges in a relation table that a previous
+// version of the schema created and this one no longer lists. Those edges have
+// no source behind them and nothing else will ever remove them, so a graph
+// that keeps them disagrees with the tree permanently.
+//
+// This invariant belongs to --wipe: the fixture's endpoints are hand-created
+// entities (UUID IDs), which a default re-index deliberately preserves along
+// with the edges between them — see TestReindexPreservesHandWrittenKnowledge.
 //
 // Note this test cannot fail on the sweep alone: clearProjectData follows the
 // sweep with a DETACH DELETE of the project's entities, which takes these edges
@@ -162,6 +166,7 @@ func TestReindexRemovesRelationsOfRetiredTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIndexer: %v", err)
 	}
+	idx.SetWipe(true)
 	if _, err := idx.Index(); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
