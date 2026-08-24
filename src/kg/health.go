@@ -124,6 +124,9 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 // resolveHealthDB resolves the database path the same way `kg stats` does:
 // explicit scope, else the default scope, else the legacy knowledge.db.
 // Returns the path and the scope name actually used ("" for legacy).
+// A named scope that cannot be loaded is an error, never a silent fallback —
+// reporting the legacy database's health under a scope the user asked for
+// would be a wrong answer, not a degraded one.
 func resolveHealthDB(aiDir, scopeName string) (string, string, error) {
 	if scopeName == "" {
 		defaultScope, err := knowledge.GetDefaultScope(aiDir)
@@ -132,18 +135,13 @@ func resolveHealthDB(aiDir, scopeName string) (string, string, error) {
 		}
 		scopeName = defaultScope
 	}
-
-	configs, err := knowledge.ListScopeConfigs(aiDir)
-	if err != nil {
-		return "", "", err
-	}
-	if len(configs) == 0 || scopeName == "" {
+	if scopeName == "" {
 		return filepath.Join(aiDir, "knowledge.db"), "", nil
 	}
 
 	cfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("load scope %q: %w", scopeName, err)
 	}
 	return filepath.Join(aiDir, cfg.Database), scopeName, nil
 }
@@ -177,7 +175,29 @@ func writeHealthSnapshot(path, scopeKey string, metrics *knowledge.HealthMetrics
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	// Temp+rename so a concurrent reader never sees a half-written file. The
+	// read-modify-write across scope keys is still last-writer-wins, which is
+	// acceptable for a snapshot two runs of a report command rarely share.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".kg-health-*.tmp")
+	if err != nil {
+		return err
+	}
+	// CreateTemp opens 0600; keep the file world-readable like WriteFile did.
+	_ = tmp.Chmod(0644)
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 func printHealth(out io.Writer, o healthOutput, snapPath string) {

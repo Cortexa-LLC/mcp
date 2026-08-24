@@ -51,6 +51,30 @@ func seedHealthFixture(t *testing.T, root string) {
 	if _, err := store.CreateEntity("orphaned entity", "topic", projectID); err != nil {
 		t.Fatalf("CreateEntity: %v", err)
 	}
+
+	// Two observations with genuinely legacy STORED timestamps — one NULL, one
+	// stored zero — written the only way this writer can produce them: by
+	// mutating created_at after the fact. This is what the zero-timestamp
+	// metric exists to count; a fixture whose every row carries a real
+	// timestamp cannot fail a broken counter. The stored-zero row in
+	// particular guards against binding the zero time as a Go parameter,
+	// which go-kuzu mangles through UnixNano into a 1754 date that matches
+	// nothing.
+	for _, mutation := range []string{
+		"SET o.created_at = NULL",
+		`SET o.created_at = timestamp("0001-01-01 00:00:00")`,
+	} {
+		obs, err := store.CreateObservation(e2.ID, "legacy-era note", projectID)
+		if err != nil {
+			t.Fatalf("CreateObservation: %v", err)
+		}
+		result, err := store.QueryParams(
+			"MATCH (o:Observation {id: $id}) "+mutation, map[string]any{"id": obs.ID})
+		if err != nil {
+			t.Fatalf("age observation (%s): %v", mutation, err)
+		}
+		result.Close()
+	}
 }
 
 // kg health runs against a database without error, its JSON output parses,
@@ -86,11 +110,13 @@ func TestHealthCommandReportsMetricsAndGrowth(t *testing.T) {
 	if out.Current.Relations != 1 {
 		t.Errorf("relations = %d, want 1", out.Current.Relations)
 	}
-	if out.Current.Observations != 2 {
-		t.Errorf("observations = %d, want 2", out.Current.Observations)
+	if out.Current.Observations != 4 {
+		t.Errorf("observations = %d, want 4", out.Current.Observations)
 	}
-	if out.Current.ZeroTimestampObservations != 0 {
-		t.Errorf("zero-timestamp observations = %d, want 0 (this writer always stores real timestamps)",
+	// Exactly the two deliberately aged rows — not 0 (metric dead) and not 4
+	// (metric counting scan artifacts instead of stored values).
+	if out.Current.ZeroTimestampObservations != 2 {
+		t.Errorf("zero-timestamp observations = %d, want 2 (one NULL + one stored zero)",
 			out.Current.ZeroTimestampObservations)
 	}
 	if out.Current.OrphanedEntities != 1 {
@@ -121,6 +147,44 @@ func TestHealthCommandReportsMetricsAndGrowth(t *testing.T) {
 	}
 	if second.Growth.Entities != 0 || second.Growth.Relations != 0 || second.Growth.Observations != 0 {
 		t.Errorf("growth on unchanged graph = %+v, want all zero", *second.Growth)
+	}
+
+	// Grow the graph and check the deltas' magnitude AND sign — a zero-growth
+	// assertion alone cannot tell current-minus-previous from its inverse.
+	store, err := knowledge.OpenStore(filepath.Join(root, ".ai", "knowledge.db"))
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	projectID := projectIDFromCwd(root)
+	g1, err := store.CreateEntity("growth entity one", "topic", projectID)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	g2, err := store.CreateEntity("growth entity two", "topic", projectID)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err := store.CreateObservation(g1.ID, "growth note", projectID); err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+	if err := store.CreateRelation(g1.ID, g2.ID, knowledge.RelRelatesTo, projectID); err != nil {
+		t.Fatalf("CreateRelation: %v", err)
+	}
+	store.Close()
+
+	buf.Reset()
+	if err := runHealth(root, "", true, &buf); err != nil {
+		t.Fatalf("third runHealth: %v", err)
+	}
+	var third healthOutput
+	if err := json.Unmarshal(buf.Bytes(), &third); err != nil {
+		t.Fatalf("third health --json output does not parse: %v", err)
+	}
+	if third.Growth == nil {
+		t.Fatal("third run has no growth")
+	}
+	if third.Growth.Entities != 2 || third.Growth.Relations != 1 || third.Growth.Observations != 1 {
+		t.Errorf("growth after adding 2 entities, 1 relation, 1 observation = %+v, want {2 1 1}", *third.Growth)
 	}
 }
 

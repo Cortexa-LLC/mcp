@@ -117,6 +117,73 @@ func TestReindexPreservesHandWrittenKnowledge(t *testing.T) {
 	}
 }
 
+// Upgrade path: databases indexed before PDF entities carried source-derived
+// ids hold UUID file entities the selective clear would otherwise preserve
+// forever, duplicated by the file:<relPath> entity each re-index creates. The
+// post-index cleanup removes exactly the shadowed ones; a hand-written
+// file-typed entity about a PDF the run did not index stays protected.
+func TestReindexRemovesLegacyUUIDPDFEntities(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	pdfBytes := buildMinimalPDF("Selective clear legacy PDF upgrade-path test document content.")
+	if err := os.WriteFile(filepath.Join(srcDir, "doc.pdf"), pdfBytes, 0o644); err != nil {
+		t.Fatalf("write PDF: %v", err)
+	}
+
+	store, err := OpenStore(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// Simulate the pre-upgrade state: the old PDF indexer's output was a
+	// UUID-id file entity named by relPath, with chunk observations.
+	legacy, err := store.CreateEntity("doc.pdf", EntityTypeFile, selectiveClearProject)
+	if err != nil {
+		t.Fatalf("CreateEntity legacy: %v", err)
+	}
+	if _, err := store.CreateObservation(legacy.ID, "stale chunk from the old indexer", selectiveClearProject); err != nil {
+		t.Fatalf("CreateObservation legacy: %v", err)
+	}
+	// A hand-written file-typed note about a PDF that is NOT in the tree —
+	// no indexed counterpart, so it must survive.
+	handNote, err := store.CreateEntity("design-notes.pdf", EntityTypeFile, selectiveClearProject)
+	if err != nil {
+		t.Fatalf("CreateEntity hand note: %v", err)
+	}
+
+	idx, err := NewIndexer(store, selectiveClearProject, srcDir)
+	if err != nil {
+		t.Fatalf("NewIndexer: %v", err)
+	}
+	if _, err := idx.Index(); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	// The indexed counterpart exists under its source-derived id…
+	if _, err := store.GetEntity("file:doc.pdf", selectiveClearProject); err != nil {
+		t.Fatalf("indexed PDF entity missing (extraction fallback failed?): %v", err)
+	}
+	// …the shadowed legacy duplicate and its observation are gone…
+	if _, err := store.GetEntity(legacy.ID, selectiveClearProject); err == nil {
+		t.Error("legacy UUID PDF entity survived the re-index; it now duplicates file:doc.pdf forever")
+	}
+	if obs, err := store.GetObservations(legacy.ID, selectiveClearProject); err == nil && len(obs) != 0 {
+		t.Errorf("legacy PDF observations survived: %d, want 0", len(obs))
+	}
+	// …and the unshadowed hand-written note is untouched.
+	if _, err := store.GetEntity(handNote.ID, selectiveClearProject); err != nil {
+		t.Errorf("hand-written file-typed entity without an indexed counterpart was deleted: %v", err)
+	}
+}
+
 // --wipe restores the historical semantics: everything belonging to the
 // project goes, hand-written knowledge included, and the tree alone rebuilds
 // the graph.
