@@ -13,6 +13,7 @@ import (
 var (
 	indexScopeName string
 	indexAll       bool
+	indexWipe      bool
 )
 
 var indexCmd = &cobra.Command{
@@ -147,6 +148,13 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 		indexer.SetScopeFilter(scopeConfig)
 	}
 
+	// By default a re-index rebuilds only code-derived data and preserves
+	// hand-written knowledge; --wipe clears everything first.
+	if indexWipe {
+		fmt.Println("⚠️  --wipe: clearing ALL project data, including hand-written knowledge (kg add, MCP add_entity/add_observation). Only journaled hand-writes can be restored.")
+		indexer.SetWipe(true)
+	}
+
 	start := time.Now()
 	stats, err := indexer.Index()
 	if err != nil {
@@ -193,10 +201,12 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 		fmt.Printf("   Duration:          %.3fs\n", time.Since(appStart).Seconds())
 	}
 
-	// Indexing began by clearing every entity for this project, which takes the
-	// hand-written ones with it — they share the project ID. The journal is the
-	// only copy of those, so replay them back now that the derived content is
-	// in place. This runs on every index, not only after a format migration.
+	// A default re-index preserves hand-written entities in place, but a --wipe
+	// (or a format migration, which rebuilds into a fresh database) deletes
+	// them, and the journal is the only copy. Replay is idempotent, so running
+	// it after every index is cheap insurance either way — it also restores
+	// hand-written links to code entities that the selective clear removed
+	// along with their code-derived endpoints.
 	if _, err := restoreHandWrites(store, dbPath, journalSrc, os.Stdout); err != nil {
 		fmt.Printf("Warning: restoring hand-written knowledge failed: %v\n", err)
 	}
@@ -225,4 +235,5 @@ func init() {
 	rootCmd.AddCommand(indexCmd)
 	indexCmd.Flags().StringVar(&indexScopeName, "scope", "", "Index a specific scope")
 	indexCmd.Flags().BoolVar(&indexAll, "all", false, "Index all defined scopes")
+	indexCmd.Flags().BoolVar(&indexWipe, "wipe", false, "Clear ALL project data (including hand-written knowledge) before indexing")
 }
