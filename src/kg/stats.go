@@ -37,33 +37,13 @@ By default, shows stats for the default scope. Use --scope to specify a differen
 		projectID := projectIDFromCwd(cwd)
 
 		// Determine which scope to use
-		scopeName := statsScopeName
-		if scopeName == "" {
-			// Use default scope
-			defaultScope, err := knowledge.GetDefaultScope(aiDir)
-			if err != nil {
-				return err
-			}
-			scopeName = defaultScope
-		}
-
-		// Open appropriate store
-		var dbPath string
-		configs, err := knowledge.ListScopeConfigs(aiDir)
+		// Shared with kg health: an explicitly named scope that cannot be
+		// loaded is an error, never a silent fallback to the legacy database.
+		dbPath, scopeName, err := resolveScopeDB(aiDir, statsScopeName)
 		if err != nil {
 			return err
 		}
-
-		if len(configs) == 0 || scopeName == "" {
-			// Legacy mode
-			dbPath = filepath.Join(aiDir, "knowledge.db")
-		} else {
-			// Load scope config
-			cfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
-			if err != nil {
-				return err
-			}
-			dbPath = filepath.Join(aiDir, cfg.Database)
+		if scopeName != "" {
 			fmt.Printf("Stats for scope: %s\n", scopeName)
 		}
 

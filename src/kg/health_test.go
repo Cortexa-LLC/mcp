@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 )
@@ -63,6 +64,13 @@ func seedHealthFixture(t *testing.T, root string) {
 	for _, mutation := range []string{
 		"SET o.created_at = NULL",
 		`SET o.created_at = timestamp("0001-01-01 00:00:00")`,
+		// Two dated rows pin the age stats: with the two freshly-written
+		// observations above, the four timestamped rows sort as
+		// [2020, 2022, now, now], so oldest must be 2020 and the (lower)
+		// median must be 2022 — a median query that grabs the first, last,
+		// or a legacy row cannot pass.
+		`SET o.created_at = timestamp("2020-01-01 00:00:00")`,
+		`SET o.created_at = timestamp("2022-06-15 00:00:00")`,
 	} {
 		obs, err := store.CreateObservation(e2.ID, "legacy-era note", projectID)
 		if err != nil {
@@ -110,8 +118,8 @@ func TestHealthCommandReportsMetricsAndGrowth(t *testing.T) {
 	if out.Current.Relations != 1 {
 		t.Errorf("relations = %d, want 1", out.Current.Relations)
 	}
-	if out.Current.Observations != 4 {
-		t.Errorf("observations = %d, want 4", out.Current.Observations)
+	if out.Current.Observations != 6 {
+		t.Errorf("observations = %d, want 6", out.Current.Observations)
 	}
 	// Exactly the two deliberately aged rows — not 0 (metric dead) and not 4
 	// (metric counting scan artifacts instead of stored values).
@@ -121,6 +129,19 @@ func TestHealthCommandReportsMetricsAndGrowth(t *testing.T) {
 	}
 	if out.Current.OrphanedEntities != 1 {
 		t.Errorf("orphaned entities = %d, want 1", out.Current.OrphanedEntities)
+	}
+	if oa := out.Current.ObservationAge; oa == nil {
+		t.Error("observation age missing with 4 timestamped observations")
+	} else {
+		if oa.Oldest.Year() != 2020 {
+			t.Errorf("oldest observation year = %d, want 2020", oa.Oldest.Year())
+		}
+		if oa.Median.Year() != 2022 {
+			t.Errorf("median observation year = %d, want 2022 (lower median of [2020 2022 now now])", oa.Median.Year())
+		}
+		if time.Since(oa.Newest) > time.Minute {
+			t.Errorf("newest observation = %v, want within the last minute", oa.Newest)
+		}
 	}
 	if out.Current.ObsoleteObservations != 1 {
 		t.Errorf("[OBSOLETE observations = %d, want 1", out.Current.ObsoleteObservations)
@@ -202,9 +223,27 @@ func TestHealthCommandHumanOutput(t *testing.T) {
 	if err := runHealth(root, "", false, &buf); err != nil {
 		t.Fatalf("runHealth: %v", err)
 	}
-	for _, want := range []string{"legacy, age unknown", "Orphaned entities", "No previous snapshot"} {
+	for _, want := range []string{"legacy, age unknown", "Orphaned entities", "No previous snapshot", "Observation age: newest"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("human output missing %q:\n%s", want, buf.String())
 		}
+	}
+}
+
+// An explicitly named scope that cannot be loaded is an error for both
+// report commands (kg health and kg stats share resolveScopeDB) — never a
+// silent fallback to the legacy database, which answers the wrong question.
+func TestResolveScopeDBErrorsOnUnloadableScope(t *testing.T) {
+	aiDir := filepath.Join(t.TempDir(), ".ai")
+	if err := os.MkdirAll(aiDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if _, _, err := resolveScopeDB(aiDir, "no-such-scope"); err == nil {
+		t.Error("resolveScopeDB with an unloadable scope returned nil error, want failure")
+	}
+	// No scope named and none configured: the legacy database, no error.
+	dbPath, scopeName, err := resolveScopeDB(aiDir, "")
+	if err != nil || scopeName != "" || filepath.Base(dbPath) != "knowledge.db" {
+		t.Errorf("legacy resolution = (%q, %q, %v), want knowledge.db path, empty scope, nil", dbPath, scopeName, err)
 	}
 }

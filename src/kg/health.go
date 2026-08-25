@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 	"github.com/spf13/cobra"
@@ -72,7 +73,7 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 	aiDir := filepath.Join(root, ".ai")
 	projectID := projectIDFromCwd(root)
 
-	dbPath, scopeName, err := resolveHealthDB(aiDir, scopeName)
+	dbPath, scopeName, err := resolveScopeDB(aiDir, scopeName)
 	if err != nil {
 		return err
 	}
@@ -121,15 +122,14 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 	return nil
 }
 
-// resolveHealthDB resolves the database path: explicit scope, else the
-// default scope, else the legacy knowledge.db. Returns the path and the scope
-// name actually used ("" for legacy). This mirrors `kg stats` with one
-// deliberate divergence: stats silently falls back to the legacy database
-// when a named scope cannot be loaded, health errors (see below).
+// resolveScopeDB resolves the database path for read-only report commands
+// (kg health, kg stats): explicit scope, else the default scope, else the
+// legacy knowledge.db. Returns the path and the scope name actually used
+// ("" for legacy).
 // A named scope that cannot be loaded is an error, never a silent fallback —
 // reporting the legacy database's health under a scope the user asked for
 // would be a wrong answer, not a degraded one.
-func resolveHealthDB(aiDir, scopeName string) (string, string, error) {
+func resolveScopeDB(aiDir, scopeName string) (string, string, error) {
 	if scopeName == "" {
 		defaultScope, err := knowledge.GetDefaultScope(aiDir)
 		if err != nil {
@@ -220,6 +220,12 @@ func printHealth(out io.Writer, o healthOutput, snapPath string) {
 		fmt.Fprintf(out, "\nNo previous snapshot — growth will be reported from the next run.\n")
 	}
 
+	if oa := o.Current.ObservationAge; oa != nil {
+		gen := o.Current.GeneratedAt
+		fmt.Fprintf(out, "\nObservation age: newest %s, median %s, oldest %s\n",
+			humanAge(gen.Sub(oa.Newest)), humanAge(gen.Sub(oa.Median)), humanAge(gen.Sub(oa.Oldest)))
+	}
+
 	share := 0.0
 	if o.Current.Observations > 0 {
 		share = float64(o.Current.ZeroTimestampObservations) / float64(o.Current.Observations) * 100
@@ -230,6 +236,25 @@ func printHealth(out io.Writer, o healthOutput, snapPath string) {
 	fmt.Fprintf(out, "[OBSOLETE-marked observations:                     %d\n", o.Current.ObsoleteObservations)
 
 	fmt.Fprintf(out, "\nSnapshot written to %s\n", snapPath)
+}
+
+// humanAge renders a duration as a coarse age ("3h", "2d", "5mo") for the
+// observation-age line; precision beyond this is noise in a health report.
+func humanAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
+	}
 }
 
 // formatEntityTypes renders the by-type counts sorted by count descending,

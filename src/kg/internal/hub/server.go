@@ -68,6 +68,7 @@ func NewServerWithAuth(dataDir string, readVerifier, seedVerifier Verifier, kgVe
 		kgVersion:    kgVersion,
 	}
 	s.sweepStaging()
+	s.reconcileInstalls()
 	return s
 }
 
@@ -95,6 +96,52 @@ func (s *Server) sweepStaging() {
 				_ = os.RemoveAll(filepath.Join(gdir, n))
 			}
 		}
+	}
+}
+
+// reconcileInstalls restores the invariant that `current` and the registry
+// name the same commit for every graph.
+//
+// install's rollback covers error returns, but a hard kill between its two
+// renames — repointing `current`, then writing the registry — leaves
+// `current` on a commit the registry never recorded. That split is silent
+// and permanent: a search reads the database from `current` but queries it
+// with the registry's ProjectID, so the graph answers HTTP 200 with zero
+// results whenever the project ID changed, and no later read corrects it.
+//
+// The registry write is install's commit point, so the registry is the
+// authority: an unregistered `current` target means the seed never
+// committed, and the symlink is rolled back to the registered commit. The
+// orphaned commit directory is deliberately left in place — the next
+// successful install's prune removes it, and deleting data is not a job for
+// a constructor-time repair pass.
+func (s *Server) reconcileInstalls() {
+	reg, err := loadRegistry(s.dataDir)
+	if err != nil {
+		log.Printf("reconcile installs: load registry: %v", err)
+		return
+	}
+	for name, info := range reg.Graphs {
+		// registry.json is hand-editable: validate everything joined into a
+		// path, as everywhere else.
+		if !validPathComponent(name) || !validPathComponent(info.Commit) {
+			continue
+		}
+		gdir := s.graphDir(name)
+		currentLink := filepath.Join(gdir, "current")
+		target, err := os.Readlink(currentLink)
+		if err != nil || target == info.Commit {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(gdir, info.Commit)); err != nil {
+			log.Printf("reconcile %s: current -> %s but registry records %s, whose directory is missing — leaving as is", name, target, info.Commit)
+			continue
+		}
+		if err := replaceSymlink(gdir, currentLink, info.Commit); err != nil {
+			log.Printf("reconcile %s: repoint current %s -> %s: %v", name, target, info.Commit, err)
+			continue
+		}
+		log.Printf("reconcile %s: current pointed at unregistered commit %s (interrupted seed); rolled back to registered %s", name, target, info.Commit)
 	}
 }
 

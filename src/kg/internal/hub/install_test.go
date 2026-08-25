@@ -3,8 +3,10 @@ package hub
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,5 +142,54 @@ func TestRegistryWriteFailureLeavesGraphUnchanged(t *testing.T) {
 	names, commit = searchNames(t, ts.URL, "g", "NewEntity")
 	if !contains(names, "NewEntity") || commit != commitB {
 		t.Errorf("retry did not install: commit = %q (want %q), results = %v", commit, commitB, names)
+	}
+}
+
+// A hard kill between install's two renames — `current` repointed, registry
+// not yet written — leaves search reading one commit's database with another
+// commit's ProjectID: HTTP 200 with zero results, permanently. Construction
+// reconciles: the registry write is the commit point, so `current` rolls
+// back to the registered commit and the graph answers again.
+func TestReconcileRollsBackInterruptedSeed(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("a", 40)
+	dbPath := buildFixtureDBFor(t, "ReconcileEntity", "proj-one", commit)
+	if err := pushFixtureFor(t, ts.URL, "recon", dbPath, commit, "proj-one"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	if names, _ := searchNames(t, ts.URL, "recon", "ReconcileEntity"); len(names) == 0 {
+		t.Fatal("fixture graph does not answer before the simulated crash")
+	}
+	ts.Close()
+
+	// Simulate the crash: a new commit directory exists and `current` points
+	// at it, but the process died before the registry recorded it. The empty
+	// directory doubles as a tripwire — if reconciliation does not roll back,
+	// the search below fails against the missing database rather than
+	// silently passing.
+	gdir := filepath.Join(dataDir, "graphs", "recon")
+	orphan := strings.Repeat("b", 40)
+	if err := os.MkdirAll(filepath.Join(gdir, orphan), 0o755); err != nil {
+		t.Fatalf("create orphan commit dir: %v", err)
+	}
+	if err := replaceSymlink(gdir, filepath.Join(gdir, "current"), orphan); err != nil {
+		t.Fatalf("repoint current: %v", err)
+	}
+
+	// Restart the hub over the same data dir.
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	if target, err := os.Readlink(filepath.Join(gdir, "current")); err != nil || target != commit {
+		t.Errorf("current -> %q (err %v), want rolled back to %q", target, err, commit)
+	}
+	names, gotCommit := searchNames(t, ts2.URL, "recon", "ReconcileEntity")
+	if len(names) == 0 || names[0] != "ReconcileEntity" {
+		t.Errorf("search after reconcile = %v, want [ReconcileEntity]", names)
+	}
+	if gotCommit != commit {
+		t.Errorf("served commit = %q, want %q", gotCommit, commit)
 	}
 }
