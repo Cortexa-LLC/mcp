@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 	"github.com/spf13/cobra"
@@ -27,6 +28,9 @@ var (
 	graphLimit     int
 	graphOutput    string
 	graphScope     string
+	graphFederated bool
+	graphLayers    []string
+	graphMaxJoin   int
 )
 
 // graphSettings is one invocation's flags, kept separate from the flag
@@ -39,6 +43,23 @@ type graphSettings struct {
 	NodeTypes []string
 	RelTypes  []string
 	Limit     int
+}
+
+// validate checks the settings that do not depend on the graph, so a bad
+// invocation fails before any database is opened.
+func (s graphSettings) validate() (knowledge.GraphFormat, knowledge.Direction, error) {
+	format, err := knowledge.ParseGraphFormat(s.Format)
+	if err != nil {
+		return "", "", err
+	}
+	direction, err := knowledge.ParseDirection(s.Direction)
+	if err != nil {
+		return "", "", err
+	}
+	if s.Depth < 0 {
+		return "", "", fmt.Errorf("--depth must not be negative")
+	}
+	return format, direction, nil
 }
 
 var graphCmd = &cobra.Command{
@@ -65,11 +86,15 @@ Examples:
   kg graph --format dot | dot -Tsvg -o graph.svg # render an image
   kg graph --personal --format json              # personal store, machine-readable`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		store, projectID, err := openTarget(true, graphScope)
-		if err != nil {
-			return err
+		// Silently ignoring these would render one database and look like it
+		// had honoured the request.
+		if !graphFederated {
+			for _, flag := range []string{"layer", "join-max-layers"} {
+				if cmd.Flags().Changed(flag) {
+					return fmt.Errorf("--%s only applies with --federated", flag)
+				}
+			}
 		}
-		defer store.Close()
 
 		out := cmd.OutOrStdout()
 		if graphOutput != "" {
@@ -90,7 +115,21 @@ Examples:
 			RelTypes:  graphRelTypes,
 			Limit:     graphLimit,
 		}
-		sub, err := runGraph(store, projectID, settings, out)
+
+		var sub knowledge.Subgraph
+		var err error
+		if graphFederated {
+			sub, err = runFederatedGraph(cmd, settings, out)
+		} else {
+			var store *knowledge.Store
+			var projectID string
+			store, projectID, err = openTarget(true, graphScope)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			sub, err = runGraph(store, projectID, settings, out)
+		}
 		if err != nil {
 			return err
 		}
@@ -112,19 +151,20 @@ Examples:
 
 // runGraph renders one slice of store's graph to out, returning what it drew.
 func runGraph(store *knowledge.Store, projectID string, s graphSettings, out io.Writer) (knowledge.Subgraph, error) {
-	format, err := knowledge.ParseGraphFormat(s.Format)
-	if err != nil {
+	if _, _, err := s.validate(); err != nil {
 		return knowledge.Subgraph{}, err
 	}
-	direction, err := knowledge.ParseDirection(s.Direction)
-	if err != nil {
-		return knowledge.Subgraph{}, err
-	}
-	if s.Depth < 0 {
-		return knowledge.Subgraph{}, fmt.Errorf("--depth must not be negative")
-	}
-
 	graph, err := knowledge.LoadGraph(store, projectID)
+	if err != nil {
+		return knowledge.Subgraph{}, err
+	}
+	return renderLoadedGraph(graph, s, out)
+}
+
+// renderLoadedGraph selects and renders from a graph that is already in memory,
+// whichever way it was loaded — one database or sixty.
+func renderLoadedGraph(graph *knowledge.Graph, s graphSettings, out io.Writer) (knowledge.Subgraph, error) {
+	format, direction, err := s.validate()
 	if err != nil {
 		return knowledge.Subgraph{}, err
 	}
@@ -158,6 +198,88 @@ func runGraph(store *knowledge.Store, projectID string, s graphSettings, out io.
 	return sub, nil
 }
 
+// runFederatedGraph renders across a scope and every layer it federates with.
+func runFederatedGraph(cmd *cobra.Command, s graphSettings, out io.Writer) (knowledge.Subgraph, error) {
+	if usePersonal {
+		return knowledge.Subgraph{}, fmt.Errorf("--personal and --federated are mutually exclusive: the personal store has no layers")
+	}
+	if _, _, err := s.validate(); err != nil {
+		return knowledge.Subgraph{}, err
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return knowledge.Subgraph{}, err
+	}
+	root := findProjectRoot(cwd)
+	aiDir := filepath.Join(root, ".ai")
+
+	scopeName := graphScope
+	if scopeName == "" {
+		if scopeName, err = knowledge.GetDefaultScope(aiDir); err != nil {
+			return knowledge.Subgraph{}, err
+		}
+	}
+	if scopeName == "" {
+		return knowledge.Subgraph{}, fmt.Errorf("--federated needs scopes: this project has a single knowledge.db with no layers")
+	}
+	scope, err := knowledge.LoadScopeConfig(aiDir, scopeName)
+	if err != nil {
+		return knowledge.Subgraph{}, err
+	}
+
+	graph, report, err := knowledge.LoadFederatedGraph(knowledge.FederatedGraphOptions{
+		AIDir:         aiDir,
+		Scope:         scope,
+		ProjectID:     filepath.Base(root),
+		OnlyLayers:    graphLayers,
+		MaxJoinLayers: graphMaxJoin,
+	})
+	if err != nil {
+		return knowledge.Subgraph{}, err
+	}
+	printFederationReport(cmd, report)
+
+	return renderLoadedGraph(graph, s, out)
+}
+
+// printFederationReport writes what the federated load did to stderr, keeping
+// stdout a clean document. A merged graph hides two things a reader would want
+// to know — a layer that failed to open, and identities too widespread to
+// join — so both are said out loud rather than left to be inferred.
+func printFederationReport(cmd *cobra.Command, report *knowledge.FederationReport) {
+	nodes, edges := 0, 0
+	for _, l := range report.Layers {
+		nodes += l.Nodes
+		edges += l.Edges
+	}
+	cmd.PrintErrf("Federated %d layer(s): %d node(s), %d relation(s).\n", len(report.Layers), nodes, edges)
+
+	if report.Joined > 0 {
+		cmd.PrintErrf("Joined %d identit%s across layers, merging %d duplicate row(s).\n",
+			report.Joined, plural(report.Joined, "y", "ies"), report.MergedNodes)
+	}
+	if n := len(report.Suppressed); n > 0 {
+		cmd.PrintErrf("Left %d name(s) unjoined: they appear in more than %d layers, which reads as "+
+			"boilerplate rather than one shared symbol. Raise --join-max-layers to join them anyway. Worst:\n", n, report.MaxJoinLayers)
+		for i, sup := range report.Suppressed {
+			if i == 5 {
+				break
+			}
+			cmd.PrintErrf("  %s (%s) in %d layers\n", sup.Name, sup.Type, sup.Layers)
+		}
+	}
+	if report.IDCollisions > 0 {
+		cmd.PrintErrf("Renamed %d node(s) whose ID existed in more than one layer — the indexers derive "+
+			"IDs from repo-relative paths, so the same ID can mean different things in different layers.\n",
+			report.IDCollisions)
+	}
+	for _, failed := range report.FailedLayers() {
+		cmd.PrintErrf("Warning: layer %s could not be read and is missing from this graph: %s\n",
+			failed.Name, failed.Failed)
+	}
+}
+
 func init() {
 	// A root that does not resolve, or a filter that matches nothing, is a
 	// runtime answer rather than a misuse of the command — printing the whole
@@ -182,6 +304,12 @@ func init() {
 		"Write to a file instead of stdout")
 	graphCmd.Flags().StringVar(&graphScope, "scope", "",
 		"Scope to render (default: default scope)")
+	graphCmd.Flags().BoolVar(&graphFederated, "federated", false,
+		"Render the scope together with every layer it federates with, joining shared identities across them")
+	graphCmd.Flags().StringSliceVar(&graphLayers, "layer", nil,
+		"With --federated, restrict the load to these scopes instead of all layers")
+	graphCmd.Flags().IntVar(&graphMaxJoin, "join-max-layers", knowledge.DefaultMaxJoinLayers,
+		"With --federated, a name found in more than this many layers is boilerplate, not one shared symbol, and is left unjoined")
 	registerPersonalFlag(graphCmd)
 
 	rootCmd.AddCommand(graphCmd)
