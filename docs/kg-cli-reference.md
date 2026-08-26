@@ -188,6 +188,67 @@ for an entity in the personal store.
 
 ---
 
+### `kg graph`
+
+Render part of the graph as a diagram — mermaid by default, Graphviz DOT, or JSON.
+
+```bash
+kg graph --root parseToken                       # neighbourhood, 2 hops, mermaid
+kg graph --root parseToken --depth 3             # wider
+kg graph --root Store --direction in             # what depends on Store
+kg graph --root main.go --rel CALLS,CONTAINS     # only those relations
+kg graph --type file,package --limit 60          # whole graph, structure only
+kg graph --format dot | dot -Tsvg -o graph.svg   # render an image
+kg graph --scope platform -o platform.mmd        # one scope, to a file
+kg graph --personal --format json                # personal store, machine-readable
+```
+
+**Start from a `--root`.** Without one the whole graph is rendered, and for a real
+project that is a hairball no renderer can help with — a few hundred entities is
+already too many to read. The unit that works is one entity and a hop or two
+around it, which is what `--root` plus `--depth` draws. Find a root with
+`kg search`.
+
+`--root` accepts an entity ID or a name. A name matching more than one entity is
+an error listing the candidates, because on a Go project `--root main` means both
+the function and the package and guessing would be worse than asking:
+
+```
+$ kg graph --root main
+Error: "main" matches 2 entities — use an ID instead:
+  main (function) function:main.go:main
+  main (package) package:main
+```
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--root`, `-r` | *(whole graph)* | Entity ID or name to centre on |
+| `--depth`, `-d` | `2` | Hops to follow from `--root` |
+| `--direction` | `both` | `out` = what this depends on, `in` = what depends on this |
+| `--format`, `-f` | `mermaid` | `mermaid`, `dot`, or `json` |
+| `--type` | *(all)* | Only these entity types; `--root` is always kept |
+| `--rel` | *(all)* | Only follow these relation types |
+| `--limit` | `200` | Maximum nodes; `0` for no limit |
+| `--output`, `-o` | *(stdout)* | Write to a file |
+
+`--rel` constrains what the walk follows, not just what is drawn, so filtering to
+`CONTAINS` gives the containment tree rather than the same neighbourhood with
+arrows missing. `--type` works the other way: it excludes nodes, and relations
+between two surviving nodes are still drawn — including links between neighbours
+the walk reached separately, which is what makes the picture a graph and not a
+tree.
+
+Output is deterministic: the same graph renders byte-identically every run, so a
+diagram can be committed and diffed. When `--limit` cuts the walk short, the
+render says so in its header comment and on stderr — a truncated picture that
+looked complete would be worse than no picture.
+
+Entity types are drawn as distinguishable mermaid shapes: rectangle for files,
+stadium for functions, hexagon for types, subroutine for packages, parallelogram
+for imports, rounded for topics. The `--root` node is outlined thicker.
+
+---
+
 ### `kg add entity`
 
 Manually add an entity to the graph. Useful for concepts, topics, or decisions

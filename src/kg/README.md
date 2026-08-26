@@ -140,6 +140,8 @@ kg search "api" --scope team-a    # search specific scope + layers
 kg search "cache" --all           # search all scopes independently
 kg stats                          # count of entities, relations, observations
 kg show <entity-id>               # show one entity with its relations + observations
+kg graph --root <id-or-name>      # draw its neighbourhood as mermaid
+kg graph --format dot | dot -Tsvg -o graph.svg   # or as a Graphviz image
 
 # Scope management (monorepos)
 kg config list-scopes             # list all defined scopes
@@ -170,8 +172,9 @@ kg server --stdio
 kg version
 ```
 
-`kg export`, `kg graph`, `kg gc`, and `kg embed` are registered but not yet implemented —
-they print `Not yet implemented` and exit 0.
+Also available: `kg export` / `kg import` (JSONL dumps and journal compaction),
+`kg health`, `kg migrate`, `kg embed` (backfill vector embeddings), and the
+`kg hub` and `kg push` commands for sharing graphs across projects.
 
 See [docs/kg-cli-reference.md](../../docs/kg-cli-reference.md) for the full reference,
 including all flags, entity types, relation types, and Cypher query examples.
