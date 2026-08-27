@@ -193,3 +193,35 @@ func TestReconcileRollsBackInterruptedSeed(t *testing.T) {
 		t.Errorf("served commit = %q, want %q", gotCommit, commit)
 	}
 }
+
+// A `current` symlink that is missing entirely — a partial copy, a restored
+// backup, an operator — is state the hub did not create, and leaving it
+// unrepaired is strictly worse than the split reconcile exists to fix: every
+// search 500s, permanently. The registry knows the answer, so construction
+// recreates the link.
+func TestReconcileRestoresMissingCurrent(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("c", 40)
+	dbPath := buildFixtureDBFor(t, "MissingCurrentEntity", "proj-mc", commit)
+	if err := pushFixtureFor(t, ts.URL, "mc", dbPath, commit, "proj-mc"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	ts.Close()
+
+	gdir := filepath.Join(dataDir, "graphs", "mc")
+	if err := os.Remove(filepath.Join(gdir, "current")); err != nil {
+		t.Fatalf("remove current: %v", err)
+	}
+
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	if target, err := os.Readlink(filepath.Join(gdir, "current")); err != nil || target != commit {
+		t.Fatalf("current -> %q (err %v), want restored to %q", target, err, commit)
+	}
+	if names, _ := searchNames(t, ts2.URL, "mc", "MissingCurrentEntity"); len(names) == 0 {
+		t.Error("graph does not answer after restoring a missing current symlink")
+	}
+}

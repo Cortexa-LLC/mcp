@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -182,13 +183,16 @@ func collectObservationAge(store *Store, projectID string, timestamped int) (*Ob
 
 	// Median by position: the middle row (lower of the two for even counts)
 	// of the timestamped observations in created_at order.
-	result, err = store.QueryParams(fmt.Sprintf(`
+	// Plain concatenation, not Sprintf: the format string would embed
+	// timestampedObsFilter, so a '%' ever appearing in that shared constant
+	// would silently corrupt this query.
+	result, err = store.QueryParams(`
 		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
 		WHERE `+timestampedObsFilter+`
 		RETURN o.created_at
 		ORDER BY o.created_at
-		SKIP %d LIMIT 1
-	`, (timestamped-1)/2), map[string]any{"project_id": projectID})
+		SKIP `+strconv.Itoa((timestamped-1)/2)+` LIMIT 1
+	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return nil, err
 	}

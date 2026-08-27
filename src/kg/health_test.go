@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,5 +246,86 @@ func TestResolveScopeDBErrorsOnUnloadableScope(t *testing.T) {
 	dbPath, scopeName, err := resolveScopeDB(aiDir, "")
 	if err != nil || scopeName != "" || filepath.Base(dbPath) != "knowledge.db" {
 		t.Errorf("legacy resolution = (%q, %q, %v), want knowledge.db path, empty scope, nil", dbPath, scopeName, err)
+	}
+}
+
+// humanAge's thresholds, which the report's only age line depends on. The
+// human-output test can pass on an empty or misordered rendering, so the
+// boundaries are pinned here directly.
+func TestHumanAge(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{time.Minute, "1m"},
+		{59 * time.Minute, "59m"},
+		{time.Hour, "1h"},
+		{23 * time.Hour, "23h"},
+		{24 * time.Hour, "1d"},
+		{29 * 24 * time.Hour, "29d"},
+		{30 * 24 * time.Hour, "1mo"},
+		{364 * 24 * time.Hour, "12mo"},
+		{365 * 24 * time.Hour, "1y"},
+		{800 * 24 * time.Hour, "2y"},
+	}
+	for _, tc := range cases {
+		if got := humanAge(tc.d); got != tc.want {
+			t.Errorf("humanAge(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+// The age line names newest, median, and oldest in that order with real
+// values — an assertion on the label alone passes even if humanAge returns
+// empty strings or the three are rendered in the wrong order.
+func TestHealthHumanOutputAgeLine(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	root := t.TempDir()
+	seedHealthFixture(t, root)
+
+	var buf bytes.Buffer
+	if err := runHealth(root, "", false, &buf); err != nil {
+		t.Fatalf("runHealth: %v", err)
+	}
+	// The fixture's timestamped rows are [2020, 2022, now, now], so the line
+	// must read newest "just now", median ~4y, oldest ~6y — ordered oldest
+	// last. Years drift with the wall clock, so match the shape and the
+	// ordering rather than exact ages.
+	line := ""
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.HasPrefix(l, "Observation age:") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no observation-age line in report:\n%s", buf.String())
+	}
+	newestIdx := strings.Index(line, "newest just now")
+	medianIdx := strings.Index(line, "median ")
+	oldestIdx := strings.Index(line, "oldest ")
+	if newestIdx < 0 || medianIdx < 0 || oldestIdx < 0 {
+		t.Fatalf("age line missing a labelled value: %q", line)
+	}
+	if !(newestIdx < medianIdx && medianIdx < oldestIdx) {
+		t.Errorf("age line out of order (newest, median, oldest): %q", line)
+	}
+	if strings.Contains(line, "median y") || strings.Contains(line, "median ,") {
+		t.Errorf("age line has an empty median value: %q", line)
+	}
+	// Median (2022) must read as a smaller age than oldest (2020).
+	var medianYears, oldestYears int
+	if _, err := fmt.Sscanf(line[medianIdx:], "median %dy", &medianYears); err != nil {
+		t.Fatalf("median value is not a year age in %q: %v", line, err)
+	}
+	if _, err := fmt.Sscanf(line[oldestIdx:], "oldest %dy", &oldestYears); err != nil {
+		t.Fatalf("oldest value is not a year age in %q: %v", line, err)
+	}
+	if medianYears >= oldestYears {
+		t.Errorf("median age %dy is not younger than oldest %dy: %q", medianYears, oldestYears, line)
 	}
 }

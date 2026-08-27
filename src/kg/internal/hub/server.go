@@ -115,6 +115,16 @@ func (s *Server) sweepStaging() {
 // orphaned commit directory is deliberately left in place — the next
 // successful install's prune removes it, and deleting data is not a job for
 // a constructor-time repair pass.
+//
+// One residual this cannot see: a kill while re-pushing the commit that is
+// ALREADY installed. install stashes the existing directory as .old-*, moves
+// the new database in, and dies before the registry write; sweepStaging then
+// deletes the stash, and `current` still names the registered commit, so
+// nothing here looks wrong. The graph serves the new database under the old
+// GraphInfo. It needs a same-commit re-push (a dirty push) whose ProjectID
+// also changed, and closing it means stamping the installed database's
+// identity somewhere this pass can compare — not worth the machinery until
+// the failure is observed.
 func (s *Server) reconcileInstalls() {
 	reg, err := loadRegistry(s.dataDir)
 	if err != nil {
@@ -125,23 +135,39 @@ func (s *Server) reconcileInstalls() {
 		// registry.json is hand-editable: validate everything joined into a
 		// path, as everywhere else.
 		if !validPathComponent(name) || !validPathComponent(info.Commit) {
+			log.Printf("reconcile: registry entry %q records invalid name or commit %q — skipping (the graph will not be served)", name, info.Commit)
 			continue
 		}
 		gdir := s.graphDir(name)
 		currentLink := filepath.Join(gdir, "current")
+
 		target, err := os.Readlink(currentLink)
-		if err != nil || target == info.Commit {
+		switch {
+		case err == nil && target == info.Commit:
+			continue
+		case err != nil && !os.IsNotExist(err):
+			// Something is there but unreadable as a symlink; repairing it
+			// blind could destroy data this pass does not understand.
+			log.Printf("reconcile %s: read current: %v — leaving as is", name, err)
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(gdir, info.Commit)); err != nil {
-			log.Printf("reconcile %s: current -> %s but registry records %s, whose directory is missing — leaving as is", name, target, info.Commit)
+		// From here: current is missing (a partial copy, a restored backup, an
+		// operator) or points somewhere the registry does not record. Both are
+		// repaired from the registry, which is install's commit point.
+
+		if _, serr := os.Stat(filepath.Join(gdir, info.Commit)); serr != nil {
+			log.Printf("reconcile %s: registry records %s but its directory is missing — leaving as is", name, info.Commit)
 			continue
 		}
-		if err := replaceSymlink(gdir, currentLink, info.Commit); err != nil {
-			log.Printf("reconcile %s: repoint current %s -> %s: %v", name, target, info.Commit, err)
+		if rerr := replaceSymlink(gdir, currentLink, info.Commit); rerr != nil {
+			log.Printf("reconcile %s: point current at %s: %v", name, info.Commit, rerr)
 			continue
 		}
-		log.Printf("reconcile %s: current pointed at unregistered commit %s (interrupted seed); rolled back to registered %s", name, target, info.Commit)
+		if os.IsNotExist(err) {
+			log.Printf("reconcile %s: current was missing; pointed it at the registered commit %s", name, info.Commit)
+		} else {
+			log.Printf("reconcile %s: current pointed at unregistered commit %s (interrupted seed); rolled back to registered %s", name, target, info.Commit)
+		}
 	}
 }
 

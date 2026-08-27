@@ -36,9 +36,9 @@ By default, shows stats for the default scope. Use --scope to specify a differen
 		aiDir := filepath.Join(root, ".ai")
 		projectID := projectIDFromCwd(cwd)
 
-		// Determine which scope to use
-		// Shared with kg health: an explicitly named scope that cannot be
-		// loaded is an error, never a silent fallback to the legacy database.
+		// Shared with kg health: a scope named with --scope that cannot be
+		// loaded is an error rather than a silent fallback to the legacy
+		// database; an inherited default scope still falls back (resolveScopeDB).
 		dbPath, scopeName, err := resolveScopeDB(aiDir, statsScopeName)
 		if err != nil {
 			return err

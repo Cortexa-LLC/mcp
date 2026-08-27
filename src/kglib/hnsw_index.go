@@ -2,6 +2,7 @@ package kglib
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -84,6 +85,7 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 
 	entities := make(map[string]*Entity)
 	nodes := make([]hnsw.Node[string], 0, 256)
+	dropped := 0
 
 	for result.HasNext() {
 		tuple, err := result.Next()
@@ -114,12 +116,23 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		if !ok {
 			// A component of unhandled type must exclude the whole node: the
 			// old behaviour left it at 0, silently distorting every distance
-			// this vector participated in.
+			// this vector participated in. Excluding it is correct but just as
+			// invisible from the outside — the entity simply stops appearing
+			// in vector results — so the count is reported below.
+			dropped++
 			continue
 		}
 
 		entities[entity.ID] = entity
 		nodes = append(nodes, hnsw.MakeNode(entity.ID, emb))
+	}
+
+	if dropped > 0 {
+		// Not an error — the index is still usable — but silently reduced
+		// recall is exactly the kind of thing nobody discovers from search
+		// results, so say it once per build.
+		log.Printf("index build (project %s): dropped %d of %d embedded entities whose vectors held unhandled component types",
+			projectID, dropped, dropped+len(nodes))
 	}
 
 	if len(nodes) > 0 {

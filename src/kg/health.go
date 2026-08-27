@@ -122,14 +122,29 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 	return nil
 }
 
-// resolveScopeDB resolves the database path for read-only report commands
-// (kg health, kg stats): explicit scope, else the default scope, else the
-// legacy knowledge.db. Returns the path and the scope name actually used
-// ("" for legacy).
-// A named scope that cannot be loaded is an error, never a silent fallback —
-// reporting the legacy database's health under a scope the user asked for
-// would be a wrong answer, not a degraded one.
-func resolveScopeDB(aiDir, scopeName string) (string, string, error) {
+// resolveScopeDB resolves the database path for the read-only report commands
+// (kg health, kg stats): the scope the user named, else the configured default
+// scope, else the legacy knowledge.db. Returns the path and the scope name
+// actually used ("" for legacy).
+//
+// The two sources of a scope name are held to different standards, which is
+// why requested is separate from the default rather than pre-resolved by the
+// caller:
+//
+//   - A scope the user NAMED that cannot be loaded is always an error.
+//     Reporting the legacy database under a scope someone asked for by name is
+//     a wrong answer, not a degraded one.
+//   - A default scope inherited from config.json falls back to the legacy
+//     database when the project has no scope configs at all. config.json
+//     travels with a repo and SetDefaultScope does not verify the scope
+//     exists, so a stale defaultScope naming nothing is a configuration
+//     leftover, not a request — failing there would break `kg stats` in
+//     repositories where it used to work.
+//
+// A default scope in a project that DOES have scope configs still errors: the
+// scopes are real, so a default naming a missing one is a genuine mistake.
+func resolveScopeDB(aiDir, requested string) (string, string, error) {
+	scopeName := requested
 	if scopeName == "" {
 		defaultScope, err := knowledge.GetDefaultScope(aiDir)
 		if err != nil {
@@ -139,6 +154,16 @@ func resolveScopeDB(aiDir, scopeName string) (string, string, error) {
 	}
 	if scopeName == "" {
 		return filepath.Join(aiDir, "knowledge.db"), "", nil
+	}
+
+	if requested == "" {
+		configs, err := knowledge.ListScopeConfigs(aiDir)
+		if err != nil {
+			return "", "", err
+		}
+		if len(configs) == 0 {
+			return filepath.Join(aiDir, "knowledge.db"), "", nil
+		}
 	}
 
 	cfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
