@@ -132,8 +132,15 @@ func (s *Server) reconcileInstalls() {
 		return
 	}
 	for name, info := range reg.Graphs {
-		// registry.json is hand-editable: validate everything joined into a
-		// path, as everywhere else.
+		// registry.json is hand-editable, so this runs before the pointer is
+		// dereferenced: `{"graphs":{"g":null}}` unmarshals to a nil entry, and
+		// this pass runs in the constructor — a panic here aborts `kg hub
+		// serve` outright rather than being contained to one request.
+		if info == nil {
+			log.Printf("reconcile: registry entry %q is null — skipping (the graph will not be served)", name)
+			continue
+		}
+		// Validate everything joined into a path, as everywhere else.
 		if !validPathComponent(name) || !validPathComponent(info.Commit) {
 			log.Printf("reconcile: registry entry %q records invalid name or commit %q — skipping (the graph will not be served)", name, info.Commit)
 			continue
@@ -141,9 +148,20 @@ func (s *Server) reconcileInstalls() {
 		gdir := s.graphDir(name)
 		currentLink := filepath.Join(gdir, "current")
 
+		// The registered commit's directory is what any repair points at, and
+		// its absence is worth reporting even when there is nothing to repair:
+		// a `current` that already names it still fails every search.
+		registeredExists := true
+		if _, serr := os.Stat(filepath.Join(gdir, info.Commit)); serr != nil {
+			registeredExists = false
+		}
+
 		target, err := os.Readlink(currentLink)
 		switch {
 		case err == nil && target == info.Commit:
+			if !registeredExists {
+				log.Printf("reconcile %s: current names the registered commit %s but its directory is missing — searches will fail and reconcile cannot repair it (restore the directory or re-push)", name, info.Commit)
+			}
 			continue
 		case err != nil && !os.IsNotExist(err):
 			// Something is there but unreadable as a symlink; repairing it
@@ -155,7 +173,7 @@ func (s *Server) reconcileInstalls() {
 		// operator) or points somewhere the registry does not record. Both are
 		// repaired from the registry, which is install's commit point.
 
-		if _, serr := os.Stat(filepath.Join(gdir, info.Commit)); serr != nil {
+		if !registeredExists {
 			log.Printf("reconcile %s: registry records %s but its directory is missing — leaving as is", name, info.Commit)
 			continue
 		}

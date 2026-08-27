@@ -107,7 +107,7 @@ func CollectHealthMetrics(store *Store, projectID string) (*HealthMetrics, error
 		return nil, fmt.Errorf("count zero-timestamp observations: %w", err)
 	}
 
-	if m.ObservationAge, err = collectObservationAge(store, projectID, m.Observations-m.ZeroTimestampObservations); err != nil {
+	if m.ObservationAge, err = collectObservationAge(store, projectID); err != nil {
 		return nil, fmt.Errorf("collect observation age: %w", err)
 	}
 
@@ -148,9 +148,24 @@ type ObservationAge struct {
 const timestampedObsFilter = `o.created_at IS NOT NULL AND o.created_at <> timestamp("0001-01-01 00:00:00")`
 
 // collectObservationAge computes newest/oldest/median stored created_at over
-// the project's timestamped observations. timestamped is their count, already
-// known to the caller (total minus zero-timestamp); 0 yields nil.
-func collectObservationAge(store *Store, projectID string, timestamped int) (*ObservationAge, error) {
+// the project's timestamped observations. Nil when there are none.
+//
+// The count driving the median's offset is taken here, over the same
+// predicate as the median query itself, rather than derived by the caller
+// from the total and zero-timestamp counts. Those agree in a quiet database,
+// but they are separate queries on a read-only connection with no snapshot
+// across them: a concurrent `kg index` deleting rows in between would make
+// the offset overshoot the result set, and an off-by-one there silently
+// shifts the median. One predicate, one count, one query.
+func collectObservationAge(store *Store, projectID string) (*ObservationAge, error) {
+	timestamped, err := countQuery(store, `
+		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
+		WHERE `+timestampedObsFilter+`
+		RETURN count(*)
+	`, map[string]any{"project_id": projectID})
+	if err != nil {
+		return nil, err
+	}
 	if timestamped <= 0 {
 		return nil, nil
 	}
@@ -198,7 +213,10 @@ func collectObservationAge(store *Store, projectID string, timestamped int) (*Ob
 	}
 	defer result.Close()
 	if !result.HasNext() {
-		return nil, fmt.Errorf("median query returned no row for %d timestamped observations", timestamped)
+		// A writer deleted rows between the count and this query. The age
+		// stats are one line of a report — losing them is not worth failing
+		// the whole run over, so report no age rather than an error.
+		return nil, nil
 	}
 	row, err := result.Next()
 	if err != nil {

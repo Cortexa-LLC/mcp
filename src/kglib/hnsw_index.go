@@ -131,7 +131,7 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		// Not an error — the index is still usable — but silently reduced
 		// recall is exactly the kind of thing nobody discovers from search
 		// results, so say it once per build.
-		log.Printf("index build (project %s): dropped %d of %d embedded entities whose vectors held unhandled component types",
+		log.Printf("index build (project %s): dropped %d of %d vectors read, whose components had unhandled types",
 			projectID, dropped, dropped+len(nodes))
 	}
 

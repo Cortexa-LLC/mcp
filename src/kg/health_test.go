@@ -14,9 +14,11 @@ import (
 )
 
 // seedHealthFixture creates <root>/.ai/knowledge.db with a small graph:
-// three entities (one orphaned), two observations (one [OBSOLETE-marked),
-// and one relation. The store is closed before returning so runHealth can
-// open the database read-only.
+// three entities (one orphaned), one relation, and six observations — two
+// written normally (one [OBSOLETE-marked), two aged into legacy state (NULL
+// and stored-zero created_at), and two back-dated to 2020 and 2022 to pin the
+// age stats. The store is closed before returning so runHealth can open the
+// database read-only.
 func seedHealthFixture(t *testing.T, root string) {
 	t.Helper()
 
@@ -54,11 +56,11 @@ func seedHealthFixture(t *testing.T, root string) {
 		t.Fatalf("CreateEntity: %v", err)
 	}
 
-	// Two observations with genuinely legacy STORED timestamps — one NULL, one
-	// stored zero — written the only way this writer can produce them: by
-	// mutating created_at after the fact. This is what the zero-timestamp
-	// metric exists to count; a fixture whose every row carries a real
-	// timestamp cannot fail a broken counter. The stored-zero row in
+	// Four observations with STORED timestamps this writer cannot produce
+	// directly — two legacy (NULL and stored zero), two back-dated — written
+	// the only way it can: by mutating created_at after the fact. The legacy
+	// pair is what the zero-timestamp metric exists to count; a fixture whose
+	// every row carries a real timestamp cannot fail a broken counter. The stored-zero row in
 	// particular guards against binding the zero time as a Go parameter,
 	// which go-kuzu mangles through UnixNano into a 1754 date that matches
 	// nothing.
@@ -122,8 +124,8 @@ func TestHealthCommandReportsMetricsAndGrowth(t *testing.T) {
 	if out.Current.Observations != 6 {
 		t.Errorf("observations = %d, want 6", out.Current.Observations)
 	}
-	// Exactly the two deliberately aged rows — not 0 (metric dead) and not 4
-	// (metric counting scan artifacts instead of stored values).
+	// Exactly the two legacy rows — not 0 (metric dead) and not 6 (metric
+	// counting scan artifacts instead of stored values).
 	if out.Current.ZeroTimestampObservations != 2 {
 		t.Errorf("zero-timestamp observations = %d, want 2 (one NULL + one stored zero)",
 			out.Current.ZeroTimestampObservations)
@@ -265,9 +267,16 @@ func TestHumanAge(t *testing.T) {
 		{24 * time.Hour, "1d"},
 		{29 * 24 * time.Hour, "29d"},
 		{30 * 24 * time.Hour, "1mo"},
-		{364 * 24 * time.Hour, "12mo"},
+		// The month/year boundary is 12 months of 30 days, so the ladder goes
+		// 11mo -> 1y with no "12mo" step.
+		{359 * 24 * time.Hour, "11mo"},
+		{360 * 24 * time.Hour, "1y"},
+		{364 * 24 * time.Hour, "1y"},
 		{365 * 24 * time.Hour, "1y"},
 		{800 * 24 * time.Hour, "2y"},
+		// A stored timestamp ahead of the report's clock (machine skew, or a
+		// hand-set created_at) must be named, not rendered as "just now".
+		{-time.Hour, "in the future"},
 	}
 	for _, tc := range cases {
 		if got := humanAge(tc.d); got != tc.want {

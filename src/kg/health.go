@@ -266,19 +266,28 @@ func printHealth(out io.Writer, o healthOutput, snapPath string) {
 // humanAge renders a duration as a coarse age ("3h", "2d", "5mo") for the
 // observation-age line; precision beyond this is noise in a health report.
 func humanAge(d time.Duration) string {
+	const (
+		day   = 24 * time.Hour
+		month = 30 * day
+		year  = 12 * month // 360d, so the ladder never prints "12mo" before "1y"
+	)
 	switch {
+	case d < 0:
+		// A stored timestamp ahead of the report's own clock: skew between
+		// machines pushing to a shared hub graph, or a hand-set created_at.
+		return "in the future"
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
+	case d < day:
 		return fmt.Sprintf("%dh", int(d.Hours()))
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	case d < 365*24*time.Hour:
-		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	case d < month:
+		return fmt.Sprintf("%dd", int(d/day))
+	case d < year:
+		return fmt.Sprintf("%dmo", int(d/month))
 	default:
-		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
+		return fmt.Sprintf("%dy", int(d/year))
 	}
 }
 

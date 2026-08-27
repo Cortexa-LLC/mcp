@@ -225,3 +225,48 @@ func TestReconcileRestoresMissingCurrent(t *testing.T) {
 		t.Error("graph does not answer after restoring a missing current symlink")
 	}
 }
+
+// registry.json is hand-editable, and a null entry unmarshals to a nil
+// *GraphInfo. reconcileInstalls runs in the constructor, so dereferencing it
+// there does not fail one request — it aborts `kg hub serve` before any graph
+// is served. The bad entry must be skipped, and every other graph must still
+// answer.
+func TestReconcileSurvivesNullRegistryEntry(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("d", 40)
+	dbPath := buildFixtureDBFor(t, "SurvivorEntity", "proj-null", commit)
+	if err := pushFixtureFor(t, ts.URL, "survivor", dbPath, commit, "proj-null"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	ts.Close()
+
+	// Hand-edit the registry to hold a null entry alongside the good one.
+	regPath := filepath.Join(dataDir, registryFile)
+	raw, err := os.ReadFile(regPath)
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	var reg map[string]map[string]any
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatalf("parse registry: %v", err)
+	}
+	reg["graphs"]["broken"] = nil
+	edited, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	if err := os.WriteFile(regPath, edited, 0o644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	// Construction must not panic...
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	// ...and the healthy graph must still be served.
+	if names, _ := searchNames(t, ts2.URL, "survivor", "SurvivorEntity"); len(names) == 0 {
+		t.Error("healthy graph stopped answering after a null registry entry was introduced")
+	}
+}
