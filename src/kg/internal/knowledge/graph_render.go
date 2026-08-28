@@ -99,7 +99,11 @@ func RenderMermaid(sub Subgraph) string {
 	}
 
 	for _, e := range sub.Edges {
-		fmt.Fprintf(&b, "    %s -->|%s| %s\n", ids[e.FromID], mermaidLabel(e.Type), ids[e.ToID])
+		arrow := "-->"
+		if e.Derived {
+			arrow = "-.->"
+		}
+		fmt.Fprintf(&b, "    %s %s|%s| %s\n", ids[e.FromID], arrow, mermaidLabel(e.Type), ids[e.ToID])
 	}
 
 	if sub.RootID != "" {
@@ -131,7 +135,11 @@ func RenderDOT(sub Subgraph) string {
 	}
 
 	for _, e := range sub.Edges {
-		fmt.Fprintf(&b, "    %s -> %s [label=%s];\n", ids[e.FromID], ids[e.ToID], dotQuote(e.Type))
+		attrs := "label=" + dotQuote(e.Type)
+		if e.Derived {
+			attrs += ", style=dashed"
+		}
+		fmt.Fprintf(&b, "    %s -> %s [%s];\n", ids[e.FromID], ids[e.ToID], attrs)
 	}
 
 	b.WriteString("}\n")
@@ -141,8 +149,20 @@ func RenderDOT(sub Subgraph) string {
 // writeHeader writes the provenance comment both formats carry: what is in the
 // picture, and — the part that matters — whether anything was left out of it.
 func writeHeader(b *strings.Builder, sub Subgraph, comment string) {
+	derived := 0
+	for _, e := range sub.Edges {
+		if e.Derived {
+			derived++
+		}
+	}
 	fmt.Fprintf(b, "%s kg graph: %d node(s), %d relation(s) of %d entities in the project\n",
 		comment, len(sub.Nodes), len(sub.Edges), sub.TotalNodes)
+	if derived > 0 {
+		// Said separately rather than folded into the count: these are edges
+		// this tool worked out, and a reader should not have to take them on
+		// the same footing as ones an indexer recorded.
+		fmt.Fprintf(b, "%s %d of those are derived cross-layer links, drawn dashed\n", comment, derived)
+	}
 	if sub.Truncated {
 		fmt.Fprintf(b, "%s TRUNCATED at the node limit — raise --limit to see the rest\n", comment)
 	}
