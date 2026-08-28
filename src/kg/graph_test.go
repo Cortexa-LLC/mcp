@@ -218,6 +218,8 @@ func TestRunFederatedGraphValidatesSettingsFirst(t *testing.T) {
 func TestGraphCommandFederationFlags(t *testing.T) {
 	for _, tc := range []struct{ flag, want string }{
 		{flag: "federated", want: "false"},
+		{flag: "no-derived", want: "false"},
+		{flag: "join-types", want: "[" + strings.Join(knowledge.DefaultJoinTypes, ",") + "]"},
 		{flag: "join-max-layers", want: strconv.Itoa(knowledge.DefaultMaxJoinLayers)},
 		{flag: "layer", want: "[]"},
 	} {
@@ -229,6 +231,31 @@ func TestGraphCommandFederationFlags(t *testing.T) {
 		if f.DefValue != tc.want {
 			t.Errorf("--%s default = %q, want %q", tc.flag, f.DefValue, tc.want)
 		}
+	}
+}
+
+// "none" has to survive as an empty-but-not-nil policy: nil means "use the
+// default types", and conflating the two would silently join everything the
+// user asked to join nothing.
+func TestJoinTypePolicy(t *testing.T) {
+	if got := joinTypePolicy(false, knowledge.DefaultJoinTypes); got != nil {
+		t.Errorf("unset flag = %v, want nil so the default policy applies", got)
+	}
+
+	got := joinTypePolicy(true, []string{"none"})
+	if got == nil {
+		t.Fatal("\"none\" produced nil, which means the default policy — it must join nothing")
+	}
+	if len(got) != 0 {
+		t.Errorf("\"none\" = %v, want an empty policy", got)
+	}
+
+	if got := joinTypePolicy(true, []string{" NONE "}); got == nil || len(got) != 0 {
+		t.Errorf("case and spacing changed the meaning of \"none\": %v", got)
+	}
+
+	if got := joinTypePolicy(true, []string{"package", "type"}); strings.Join(got, ",") != "package,type" {
+		t.Errorf("explicit types = %v, want [package type]", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 	"github.com/spf13/cobra"
@@ -31,6 +32,8 @@ var (
 	graphFederated bool
 	graphLayers    []string
 	graphMaxJoin   int
+	graphJoinTypes []string
+	graphNoDerived bool
 )
 
 // graphSettings is one invocation's flags, kept separate from the flag
@@ -89,7 +92,7 @@ Examples:
 		// Silently ignoring these would render one database and look like it
 		// had honoured the request.
 		if !graphFederated {
-			for _, flag := range []string{"layer", "join-max-layers"} {
+			for _, flag := range []string{"layer", "join-max-layers", "join-types", "no-derived"} {
 				if cmd.Flags().Changed(flag) {
 					return fmt.Errorf("--%s only applies with --federated", flag)
 				}
@@ -199,6 +202,14 @@ func renderLoadedGraph(graph *knowledge.Graph, s graphSettings, out io.Writer) (
 }
 
 // runFederatedGraph renders across a scope and every layer it federates with.
+// ambiguousSuffix names a few of the packages that could not be resolved.
+func ambiguousSuffix(names []string) string {
+	if len(names) == 0 {
+		return "."
+	}
+	return ", e.g. " + strings.Join(names[:min(3, len(names))], ", ") + "."
+}
+
 func runFederatedGraph(cmd *cobra.Command, s graphSettings, out io.Writer) (knowledge.Subgraph, error) {
 	if usePersonal {
 		return knowledge.Subgraph{}, fmt.Errorf("--personal and --federated are mutually exclusive: the personal store has no layers")
@@ -234,6 +245,8 @@ func runFederatedGraph(cmd *cobra.Command, s graphSettings, out io.Writer) (know
 		ProjectID:     filepath.Base(root),
 		OnlyLayers:    graphLayers,
 		MaxJoinLayers: graphMaxJoin,
+		JoinTypes:     parseJoinTypes(cmd),
+		NoDerived:     graphNoDerived,
 	})
 	if err != nil {
 		return knowledge.Subgraph{}, err
@@ -241,6 +254,26 @@ func runFederatedGraph(cmd *cobra.Command, s graphSettings, out io.Writer) (know
 	printFederationReport(cmd, report)
 
 	return renderLoadedGraph(graph, s, out)
+}
+
+// parseJoinTypes turns --join-types into the loader's policy. An unset flag
+// means the default policy; "none" means join nothing, which is distinct from
+// unset and has to survive as an empty-but-not-nil slice.
+func parseJoinTypes(cmd *cobra.Command) []string {
+	return joinTypePolicy(cmd.Flags().Changed("join-types"), graphJoinTypes)
+}
+
+// joinTypePolicy is parseJoinTypes without the cobra state, so the distinction
+// it exists to preserve can be tested directly: nil means "the default policy",
+// while an empty-but-not-nil slice means "join nothing".
+func joinTypePolicy(changed bool, values []string) []string {
+	if !changed {
+		return nil
+	}
+	if len(values) == 1 && strings.EqualFold(strings.TrimSpace(values[0]), "none") {
+		return []string{}
+	}
+	return values
 }
 
 // printFederationReport writes what the federated load did to stderr, keeping
@@ -255,6 +288,10 @@ func printFederationReport(cmd *cobra.Command, report *knowledge.FederationRepor
 	}
 	cmd.PrintErrf("Federated %d layer(s): %d node(s), %d relation(s).\n", len(report.Layers), nodes, edges)
 
+	cmd.PrintErrf("Joining identities across layers for: %s\n", strings.Join(report.JoinTypes, ", "))
+	if len(report.JoinTypes) == 0 {
+		cmd.PrintErrln("  (nothing — layers are shown as the disconnected components they are)")
+	}
 	if report.Joined > 0 {
 		cmd.PrintErrf("Joined %d identit%s across layers, merging %d duplicate row(s).\n",
 			report.Joined, plural(report.Joined, "y", "ies"), report.MergedNodes)
@@ -273,6 +310,16 @@ func printFederationReport(cmd *cobra.Command, report *knowledge.FederationRepor
 		cmd.PrintErrf("Renamed %d node(s) whose ID existed in more than one layer — the indexers derive "+
 			"IDs from repo-relative paths, so the same ID can mean different things in different layers.\n",
 			report.IDCollisions)
+	}
+	if link := report.Link; link.Derived > 0 || link.Ambiguous > 0 {
+		cmd.PrintErrf("Derived %d cross-layer package link(s), drawn dashed.\n", link.Derived)
+		if link.SameLayer > 0 {
+			cmd.PrintErrf("  %d import(s) resolved inside their own layer and were left alone.\n", link.SameLayer)
+		}
+		if link.Ambiguous > 0 {
+			cmd.PrintErrf("  %d import(s) matched a package defined in more than one layer and were skipped "+
+				"rather than guessed at%s\n", link.Ambiguous, ambiguousSuffix(link.AmbiguousNames))
+		}
 	}
 	for _, failed := range report.FailedLayers() {
 		cmd.PrintErrf("Warning: layer %s could not be read and is missing from this graph: %s\n",
@@ -308,6 +355,10 @@ func init() {
 		"Render the scope together with every layer it federates with, joining shared identities across them")
 	graphCmd.Flags().StringSliceVar(&graphLayers, "layer", nil,
 		"With --federated, restrict the load to these scopes instead of all layers")
+	graphCmd.Flags().StringSliceVar(&graphJoinTypes, "join-types", knowledge.DefaultJoinTypes,
+		"With --federated, entity types whose names identify the same thing across layers; \"none\" to join nothing")
+	graphCmd.Flags().BoolVar(&graphNoDerived, "no-derived", false,
+		"With --federated, omit derived cross-layer package links, leaving only relations an indexer recorded")
 	graphCmd.Flags().IntVar(&graphMaxJoin, "join-max-layers", knowledge.DefaultMaxJoinLayers,
 		"With --federated, a name found in more than this many layers is boilerplate, not one shared symbol, and is left unjoined")
 	registerPersonalFlag(graphCmd)
