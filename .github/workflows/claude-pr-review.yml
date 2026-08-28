@@ -453,37 +453,66 @@ jobs:
           # never reaches the log — a failure then looks like 42 seconds of
           # silence followed by "exit code 1", which is undiagnosable. (The
           # ai-pack original has this same blind spot.)
+          # --output-format json, not text. `text` emits the final message and
+          # nothing else, so a run that ends WITHOUT a final message — most
+          # commonly exhausting --max-turns — exits non-zero with both streams
+          # empty and no way to tell why. The json envelope always carries
+          # subtype / is_error / num_turns, which names the cause.
+          RAW_JSON="$(mktemp)"
+          # --max-turns 40, not ai-pack's 15: verified by reproducing this
+          # locally that the reviewer burns all 15 turns on a diff this size
+          # and returns an empty result. 15 is sized for ai-pack's own PRs; a
+          # cap that is too low fails as a silent non-zero exit, not as a
+          # short review, so err high. num_turns is logged below — if real
+          # reviews start landing near 40, raise it again rather than
+          # wondering why the reviewer went quiet.
           set +e
           claude -p "$PROMPT" \
             --model claude-sonnet-5 \
             --system-prompt-file "$SYSTEM_FILE" \
             --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Read,Glob" \
             --disallowedTools "Grep,Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.npm/**)" \
-            --max-turns 15 \
-            --output-format text > "$REVIEW_RAW" 2> "$REVIEW_ERR"
+            --max-turns 40 \
+            --output-format json > "$RAW_JSON" 2> "$REVIEW_ERR"
           CLAUDE_RC=$?
           set -e
 
-          # Both streams are echoed on failure. Actions masks registered
-          # secrets in log output, so CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN
-          # cannot surface here even if the CLI were to echo them.
-          if [ "$CLAUDE_RC" -ne 0 ]; then
+          # Always log the envelope (never the review text — that gets posted).
+          echo "run envelope: $(jq -c '{subtype, is_error, num_turns, duration_ms, total_cost_usd}' "$RAW_JSON" 2>/dev/null || echo '<unparseable json>')"
+
+          # A non-zero exit and an is_error envelope are separate failure
+          # signals; treat either as fatal.
+          IS_ERROR="$(jq -r '.is_error // false' "$RAW_JSON" 2>/dev/null || echo true)"
+          if [ "$CLAUDE_RC" -ne 0 ] || [ "$IS_ERROR" = "true" ]; then
+            # Actions masks registered secrets in log output, so
+            # CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN cannot surface in these dumps
+            # even if the CLI were to echo one.
             echo "::group::claude stderr"
             cat "$REVIEW_ERR"
             echo "::endgroup::"
-            echo "::group::claude stdout"
-            cat "$REVIEW_RAW"
+            echo "::group::claude raw json"
+            cat "$RAW_JSON"
             echo "::endgroup::"
-            echo "::error title=Claude CLI failed::claude -p exited ${CLAUDE_RC}; see the grouped stdout/stderr above."
+            SUBTYPE="$(jq -r '.subtype // "unknown"' "$RAW_JSON" 2>/dev/null || echo unknown)"
+            TURNS="$(jq -r '.num_turns // "?"' "$RAW_JSON" 2>/dev/null || echo '?')"
+            case "$SUBTYPE" in
+              error_max_turns|error_during_execution)
+                echo "::error title=Reviewer hit the turn cap::run ended as '${SUBTYPE}' after ${TURNS} turns with no final message — raise --max-turns (currently 40)." ;;
+              *)
+                echo "::error title=Claude CLI failed::claude -p exited ${CLAUDE_RC}, subtype '${SUBTYPE}'; see the grouped output above." ;;
+            esac
             exit 1
           fi
-          # A zero exit can still carry warnings worth seeing (e.g. permission
+
+          # A clean run can still carry warnings worth seeing (e.g. permission
           # rules the CLI declined to apply).
           if [ -s "$REVIEW_ERR" ]; then
             echo "::group::claude stderr (non-fatal)"
             cat "$REVIEW_ERR"
             echo "::endgroup::"
           fi
+
+          jq -r '.result' "$RAW_JSON" > "$REVIEW_RAW"
 
           # Deterministic posting: the model's text output is parsed here and
           # posted as data via --body-file. The verdict line is matched
