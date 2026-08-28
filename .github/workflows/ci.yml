@@ -1,0 +1,63 @@
+# Go CI — build, vet, and test every module in this repo on each PR and push to main.
+#
+# Layout note: src/kglib, src/kg, and src/markitdown are three SEPARATE Go modules
+# (no go.work), so each gets its own matrix leg. That also makes the PR check list
+# name the failing module directly instead of one opaque "ci" red X.
+#
+# CGo: kglib and kg depend on github.com/kuzudb/go-kuzu, which is a CGo binding.
+# go-kuzu vendors a prebuilt lib/dynamic/linux-amd64/libkuzu.so with an embedded
+# rpath, and kg additionally pulls in go-tree-sitter, so both build on a stock
+# ubuntu-latest runner with only the default C toolchain. No apt packages needed.
+# If a future bump drops the vendored .so, this is the job that will notice.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [kglib, kg, markitdown]
+    defaults:
+      run:
+        working-directory: src/${{ matrix.module }}
+    steps:
+      # Actions pinned to commit SHAs so a retag upstream can't change what runs
+      # here. Rotate by re-resolving the tag:
+      #   gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          # Read the toolchain floor from the module itself rather than pinning a
+          # version here — the three modules declare different `go` directives
+          # (1.26.2 for kglib/kg, 1.24.1 for markitdown) and this keeps CI honest
+          # to whatever each one actually asks for.
+          go-version-file: src/${{ matrix.module }}/go.mod
+          cache-dependency-path: src/${{ matrix.module }}/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
