@@ -1,12 +1,14 @@
 package kglib
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 )
@@ -88,26 +90,79 @@ var (
 	kuzuVersionVal  string
 )
 
+const kuzuModulePath = "github.com/kuzudb/go-kuzu"
+
+// goModBytes is this module's own go.mod, embedded so the go-kuzu version
+// stays recoverable when build metadata does not carry it. See KuzuVersion.
+//
+//go:embed go.mod
+var goModBytes []byte
+
 // KuzuVersion returns the go-kuzu module version this binary is built against,
-// or "unknown" when build information is unavailable (which happens only in
-// unusual build modes).
+// or "unknown" if it cannot be determined at all.
+//
+// Build info is the accurate source — it reports the version actually selected
+// and linked, which module-graph resolution can raise above what go.mod
+// requires. But it is not always populated: debug.ReadBuildInfo().Deps is
+// empty in *test binaries* under Go toolchains before 1.27 (verified: go1.26.2
+// reports len(Deps)==0 in a test binary and 15 in an ordinary one, on the same
+// source). Reading the requirement out of the embedded go.mod covers that case
+// and any other build mode that drops dependency metadata.
+//
+// Falling back matters because the failure was silent. This function used to
+// return "unknown" whenever the dep was absent from build info, WriteFormatStamp
+// then recorded "unknown" as the engine version, and CheckFormat compared
+// "unknown" against "unknown" and reported a match — so the mismatch detection
+// this whole file exists to provide would quietly pass everything while
+// appearing to work. A stamp is only worth writing if the version in it is real.
 func KuzuVersion() string {
 	kuzuVersionOnce.Do(func() {
-		kuzuVersionVal = "unknown"
-		info, ok := debug.ReadBuildInfo()
-		if !ok {
+		if v := kuzuVersionFromBuildInfo(); v != "" {
+			kuzuVersionVal = v
 			return
 		}
-		for _, dep := range info.Deps {
-			if dep.Path == "github.com/kuzudb/go-kuzu" {
-				if dep.Version != "" {
-					kuzuVersionVal = dep.Version
-				}
-				return
-			}
+		if v := kuzuVersionFromGoMod(goModBytes); v != "" {
+			kuzuVersionVal = v
+			return
 		}
+		kuzuVersionVal = "unknown"
 	})
 	return kuzuVersionVal
+}
+
+// kuzuVersionFromBuildInfo returns the linked go-kuzu version, or "" when build
+// metadata does not carry it.
+func kuzuVersionFromBuildInfo() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == kuzuModulePath {
+			return dep.Version
+		}
+	}
+	return ""
+}
+
+// kuzuVersionFromGoMod returns the go-kuzu version required by the given go.mod
+// content, or "" when it names no such requirement.
+//
+// This is a deliberately small parser rather than a golang.org/x/mod dependency:
+// it reads one well-known line out of a file this module owns. It handles the
+// two forms that line can take — inside a require block, or a single-line
+// `require <path> <version>` — and ignores any trailing `// indirect` comment.
+func kuzuVersionFromGoMod(goMod []byte) string {
+	for _, line := range strings.Split(string(goMod), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "require" {
+			fields = fields[1:] // single-line form: require <path> <version>
+		}
+		if len(fields) >= 2 && fields[0] == kuzuModulePath {
+			return fields[1]
+		}
+	}
+	return ""
 }
 
 // FormatStampPath returns the sidecar belonging to a database path.

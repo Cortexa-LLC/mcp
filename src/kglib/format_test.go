@@ -213,3 +213,53 @@ func TestArchiveDatabaseDoesNotClobberEarlierArchive(t *testing.T) {
 		t.Errorf("found %d archived databases, want 2 — the second archive overwrote the first", archives)
 	}
 }
+
+func TestKuzuVersionFromGoMod(t *testing.T) {
+	cases := []struct {
+		name  string
+		goMod string
+		want  string
+	}{
+		{
+			name:  "require block",
+			goMod: "module m\n\ngo 1.26.2\n\nrequire (\n\tgithub.com/kuzudb/go-kuzu v0.11.3\n\tgithub.com/google/uuid v1.6.0\n)\n",
+			want:  "v0.11.3",
+		},
+		{
+			name:  "single line require",
+			goMod: "module m\n\nrequire github.com/kuzudb/go-kuzu v0.12.0\n",
+			want:  "v0.12.0",
+		},
+		{
+			name:  "indirect comment is ignored",
+			goMod: "require (\n\tgithub.com/kuzudb/go-kuzu v0.11.3 // indirect\n)\n",
+			want:  "v0.11.3",
+		},
+		{
+			name:  "absent",
+			goMod: "module m\n\nrequire github.com/google/uuid v1.6.0\n",
+			want:  "",
+		},
+		{
+			name:  "prefix of the path does not match",
+			goMod: "require github.com/kuzudb/go-kuzu-extras v9.9.9\n",
+			want:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := kuzuVersionFromGoMod([]byte(tc.goMod)); got != tc.want {
+				t.Errorf("kuzuVersionFromGoMod = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The embedded go.mod must actually name go-kuzu: the fallback is what keeps
+// KuzuVersion honest when build metadata is unavailable, and a rename upstream
+// would otherwise revert stamping to "unknown" without any test noticing.
+func TestEmbeddedGoModNamesKuzu(t *testing.T) {
+	if got := kuzuVersionFromGoMod(goModBytes); got == "" {
+		t.Fatalf("embedded go.mod does not require %s; the KuzuVersion fallback is dead", kuzuModulePath)
+	}
+}
