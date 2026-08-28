@@ -142,6 +142,7 @@ kg stats                          # count of entities, relations, observations
 kg show <entity-id>               # show one entity with its relations + observations
 kg graph --root <id-or-name>      # draw its neighbourhood as mermaid
 kg graph --format dot | dot -Tsvg -o graph.svg   # or as a Graphviz image
+kg graph --federated --root <name>               # across every federated layer
 
 # Scope management (monorepos)
 kg config list-scopes             # list all defined scopes

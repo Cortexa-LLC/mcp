@@ -30,6 +30,11 @@ type GraphNode struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`
 	Depth int    `json:"depth"` // hops from the root; 0 when there is no root
+
+	// Layers names the scopes this node was read from, set only by a federated
+	// load. More than one means the same (name, type) was found in several
+	// layers and joined into this node.
+	Layers []string `json:"layers,omitempty"`
 }
 
 // GraphEdge is one directed relation between two nodes in a Subgraph. Both

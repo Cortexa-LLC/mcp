@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
+	"github.com/spf13/cobra"
 )
 
 const graphTestProject = "graphcmd"
@@ -181,6 +183,52 @@ func TestGraphCommandDefaults(t *testing.T) {
 
 	if !commandRegistered(t, "graph") {
 		t.Error("graph command is not registered on the root command")
+	}
+}
+
+// --personal names a single user-global database; there is nothing to
+// federate, so asking for both is a mistake worth naming rather than quietly
+// ignoring one of them.
+func TestRunFederatedGraphRejectsPersonal(t *testing.T) {
+	usePersonal = true
+	t.Cleanup(func() { usePersonal = false })
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&out)
+	_, err := runFederatedGraph(cmd, graphSettings{Limit: 10}, &out)
+	if err == nil {
+		t.Fatal("expected an error for --personal with --federated")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error = %q, want it to say the flags are mutually exclusive", err)
+	}
+}
+
+// Federation flags must fail before any database is opened, like the rest.
+func TestRunFederatedGraphValidatesSettingsFirst(t *testing.T) {
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&out)
+	if _, err := runFederatedGraph(cmd, graphSettings{Format: "svg"}, &out); err == nil {
+		t.Error("expected an error for an unknown format")
+	}
+}
+
+func TestGraphCommandFederationFlags(t *testing.T) {
+	for _, tc := range []struct{ flag, want string }{
+		{flag: "federated", want: "false"},
+		{flag: "join-max-layers", want: strconv.Itoa(knowledge.DefaultMaxJoinLayers)},
+		{flag: "layer", want: "[]"},
+	} {
+		f := graphCmd.Flags().Lookup(tc.flag)
+		if f == nil {
+			t.Errorf("--%s is not registered", tc.flag)
+			continue
+		}
+		if f.DefValue != tc.want {
+			t.Errorf("--%s default = %q, want %q", tc.flag, f.DefValue, tc.want)
+		}
 	}
 }
 

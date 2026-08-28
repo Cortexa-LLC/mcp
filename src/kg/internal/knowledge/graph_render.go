@@ -80,16 +80,22 @@ func RenderMermaid(sub Subgraph) string {
 	b.WriteString("graph LR\n")
 
 	ids := renderIDs(sub)
-	for _, n := range sub.Nodes {
-		openTag, closeTag := `["`, `"]`
-		if shape, ok := mermaidShapes[strings.ToLower(n.Type)]; ok {
-			openTag, closeTag = shape[0], shape[1]
+	groups := layerGroups(sub)
+	if len(groups) == 0 {
+		for _, n := range sub.Nodes {
+			writeMermaidNode(&b, ids, sub.RootID, n, "    ")
 		}
-		fmt.Fprintf(&b, "    %s%s%s%s", ids[n.ID], openTag, mermaidLabel(n.Name), closeTag)
-		if n.ID == sub.RootID {
-			b.WriteString(":::kgroot")
+	} else {
+		// A federated render without this grouping is unreadable: nodes from
+		// sixty databases in one flat list, with nothing saying which came
+		// from where.
+		for i, g := range groups {
+			fmt.Fprintf(&b, "    subgraph layer%d[\"%s\"]\n", i, mermaidLabel(g.name))
+			for _, n := range g.nodes {
+				writeMermaidNode(&b, ids, sub.RootID, n, "        ")
+			}
+			b.WriteString("    end\n")
 		}
-		b.WriteString("\n")
 	}
 
 	for _, e := range sub.Edges {
@@ -113,7 +119,11 @@ func RenderDOT(sub Subgraph) string {
 
 	ids := renderIDs(sub)
 	for _, n := range sub.Nodes {
-		attrs := fmt.Sprintf("label=%s, tooltip=%s", dotQuote(n.Name), dotQuote(n.Type))
+		tooltip := n.Type
+		if len(n.Layers) > 0 {
+			tooltip += " · " + strings.Join(n.Layers, ", ")
+		}
+		attrs := fmt.Sprintf("label=%s, tooltip=%s", dotQuote(n.Name), dotQuote(tooltip))
 		if n.ID == sub.RootID {
 			attrs += ", penwidth=3"
 		}
@@ -146,6 +156,56 @@ func renderIDs(sub Subgraph) map[string]string {
 		ids[n.ID] = fmt.Sprintf("n%d", i)
 	}
 	return ids
+}
+
+// writeMermaidNode writes one node declaration at the given indent.
+func writeMermaidNode(b *strings.Builder, ids map[string]string, rootID string, n GraphNode, indent string) {
+	openTag, closeTag := `["`, `"]`
+	if shape, ok := mermaidShapes[strings.ToLower(n.Type)]; ok {
+		openTag, closeTag = shape[0], shape[1]
+	}
+	fmt.Fprintf(b, "%s%s%s%s%s", indent, ids[n.ID], openTag, mermaidLabel(n.Name), closeTag)
+	if n.ID == rootID {
+		b.WriteString(":::kgroot")
+	}
+	b.WriteString("\n")
+}
+
+// layerGroup is one scope's nodes in a federated render.
+type layerGroup struct {
+	name  string
+	nodes []GraphNode
+}
+
+// layerGroups splits a federated subgraph into per-layer groups, in the node
+// order the subgraph already fixed. It returns nil for a single-database
+// render, or when a render spans only one layer — grouping is only worth the
+// extra syntax when there is more than one group to tell apart.
+//
+// A node joined across layers is filed under the first of them, so it appears
+// exactly once; its other layers stay on the node for JSON and DOT tooltips.
+func layerGroups(sub Subgraph) []layerGroup {
+	order := make([]string, 0, 8)
+	byLayer := make(map[string][]GraphNode)
+	for _, n := range sub.Nodes {
+		if len(n.Layers) == 0 {
+			return nil
+		}
+		layer := n.Layers[0]
+		if _, seen := byLayer[layer]; !seen {
+			order = append(order, layer)
+		}
+		byLayer[layer] = append(byLayer[layer], n)
+	}
+	if len(order) < 2 {
+		return nil
+	}
+
+	groups := make([]layerGroup, 0, len(order))
+	for _, name := range order {
+		groups = append(groups, layerGroup{name: name, nodes: byLayer[name]})
+	}
+	return groups
 }
 
 // mermaidLabel makes text safe inside a quoted mermaid label. '#' goes first:

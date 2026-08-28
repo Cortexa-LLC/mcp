@@ -230,6 +230,9 @@ Error: "main" matches 2 entities — use an ID instead:
 | `--rel` | *(all)* | Only follow these relation types |
 | `--limit` | `200` | Maximum nodes; `0` for no limit |
 | `--output`, `-o` | *(stdout)* | Write to a file |
+| `--federated` | off | Render the scope together with every layer it federates with |
+| `--layer` | *(all)* | With `--federated`, load only these scopes |
+| `--join-max-layers` | `3` | With `--federated`, the boilerplate guard (see below) |
 
 `--rel` constrains what the walk follows, not just what is drawn, so filtering to
 `CONTAINS` gives the containment tree rather than the same neighbourhood with
@@ -246,6 +249,75 @@ looked complete would be worse than no picture.
 Entity types are drawn as distinguishable mermaid shapes: rectangle for files,
 stadium for functions, hexagon for types, subroutine for packages, parallelogram
 for imports, rounded for topics. The `--root` node is outlined thicker.
+
+#### Federated rendering: `kg graph --federated`
+
+Ordinarily `kg graph` reads one database. `--federated` reads the scope and every
+layer it federates with, and merges them into a single graph:
+
+```bash
+kg graph --federated --root AddressClient --depth 1     # across every layer
+kg graph --federated --layer payments,libraries --root Charge
+kg graph --federated --join-max-layers 6 --root Deployment
+```
+
+Nodes are grouped into a mermaid `subgraph` per layer, so it stays legible which
+database each part of the picture came from.
+
+**Why this needs its own code path.** kg's federation is search-only by design —
+`SearchLayer` in `kglib/federated.go` merges query *results* and nothing
+enumerates entities across databases. Relations are also stored per-database, so
+a plain union of the layers would be a set of disconnected components. What
+connects them is joining identities across layers.
+
+**The join rule.** Two rows in two databases are the same node when their
+`(name, type)` match. That surfaces genuinely shared symbols, and equally
+surfaces the same name implemented separately in several services — often the
+more interesting answer:
+
+```
+$ kg graph --federated --layer clients,libraries,mobileapi,payments \
+    --root AddressClient --depth 1
+Federated 4 layer(s): 355429 node(s), 678308 relation(s).
+Joined 5016 identities across layers, merging 36967 duplicate row(s).
+```
+
+…which draws six separate `AddressClient` definitions across three layers,
+converging on one node.
+
+**The boilerplate guard.** An unguarded join is worse than no join. On a real
+59-layer estate the most widely shared names are markdown headings from a
+documentation template (`Service Overview`, `Deployment`, `Known Issues and
+Failure Modes`) and Helm values keys indexed as types (`accountName`,
+`environment`, `chart`) — several of them present in all 60 layers. Joining on
+those fuses every unrelated service into one hub and the picture stops meaning
+anything.
+
+So a `(name, type)` found in more than `--join-max-layers` layers (default 3) is
+read as boilerplate and left unjoined. The command says what it suppressed, so
+the threshold is inspectable rather than magic:
+
+```
+Left 5112 name(s) unjoined: they appear in more than 3 layers, which reads as
+boilerplate rather than one shared symbol. Raise --join-max-layers to join them
+anyway. Worst:
+  accountName (type) in 60 layers
+  environment (type) in 60 layers
+  jobs (type) in 60 layers
+```
+
+Two other things get reported to stderr because a merged graph would otherwise
+hide them: a layer that could not be opened (a warning, not a fatal error — a
+render missing one database is still useful, a silent hole is not), and nodes
+renamed because two layers minted the same ID for different things. Indexer IDs
+are repo-relative paths, so `import:..` legitimately means something different
+in every layer.
+
+**Cost.** Databases are read one at a time and released, so peak memory is the
+merged graph plus the largest single layer rather than all of them at once.
+Measured on a 61-layer estate — 668k entities, 1.2M relations — a full load is
+about 6 seconds and 1.2 GB resident. Use `--layer` to narrow it when you know
+which layers you care about.
 
 ---
 
