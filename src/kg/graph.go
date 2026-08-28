@@ -85,7 +85,7 @@ Examples:
   kg graph --type file,package --limit 60        # whole graph, structure only
   kg graph --format dot | dot -Tsvg -o graph.svg # render an image
   kg graph --personal --format json              # personal store, machine-readable`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 		// Silently ignoring these would render one database and look like it
 		// had honoured the request.
 		if !graphFederated {
@@ -102,7 +102,14 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("create %s: %w", graphOutput, err)
 			}
-			defer f.Close()
+			// Not a bare `defer f.Close()`: buffered writes can fail on close
+			// (a full disk, an NFS error surfacing late), and discarding that
+			// would report "Wrote N node(s)" and exit 0 over a truncated file.
+			defer func() {
+				if cerr := f.Close(); cerr != nil && retErr == nil {
+					retErr = fmt.Errorf("close %s: %w", graphOutput, cerr)
+				}
+			}()
 			out = f
 		}
 

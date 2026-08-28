@@ -256,9 +256,19 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 // primary scope, then its layers in reverse configuration order, matching the
 // priority OpenFederatedStoreWithExtra assigns them.
 func federationOrder(opts FederatedGraphOptions) ([]string, error) {
+	// Deduped: a name repeated in Layers (or a layer sharing the scope's own
+	// name) would load the same database twice, and the second pass would then
+	// hit the ID-collision rename path against its own nodes. Misconfiguration
+	// rather than an expected input, but the guard is one map.
+	seen := map[string]bool{opts.Scope.Name: true}
 	ordered := []string{opts.Scope.Name}
 	for i := len(opts.Scope.Layers) - 1; i >= 0; i-- {
-		ordered = append(ordered, opts.Scope.Layers[i])
+		name := opts.Scope.Layers[i]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		ordered = append(ordered, name)
 	}
 
 	if len(opts.OnlyLayers) == 0 {

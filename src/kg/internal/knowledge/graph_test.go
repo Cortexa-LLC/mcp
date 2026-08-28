@@ -131,6 +131,26 @@ func TestSubgraphTraversal(t *testing.T) {
 			want: []string{"app.go", "bar", "baz", "foo"},
 		},
 		{
+			// The walk must pass THROUGH a node the type filter excludes.
+			// fmt sits two hops out, behind foo (a function, excluded here):
+			// app.go -CONTAINS-> foo -IMPORTS-> fmt. --type documents itself
+			// as excluding nodes from the drawing, not as pruning the walk the
+			// way --rel does, so fmt has to survive. Gating the frontier on the
+			// type filter drops it silently, with no Truncated flag to hint
+			// that anything was lost.
+			name: "node type filter does not prune the path to a matching node",
+			opts: GraphOptions{RootID: "file:app.go", Depth: 2, NodeTypes: []string{"import"}},
+			want: []string{"app.go", "fmt"},
+		},
+		{
+			// Same shape one relation over, to pin that this is about
+			// reachability rather than one lucky edge type:
+			// app.go -CONTAINS-> bar -RELATES_TO-> Widget.
+			name: "node type filter reaches a match behind an excluded node",
+			opts: GraphOptions{RootID: "file:app.go", Depth: 2, NodeTypes: []string{"type"}},
+			want: []string{"app.go", "Widget"},
+		},
+		{
 			name: "whole graph when no root is given",
 			opts: GraphOptions{},
 			want: []string{"Widget", "app.go", "bar", "baz", "fmt", "foo"},

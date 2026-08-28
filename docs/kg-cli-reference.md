@@ -239,7 +239,10 @@ Error: "main" matches 2 entities — use an ID instead:
 arrows missing. `--type` works the other way: it excludes nodes, and relations
 between two surviving nodes are still drawn — including links between neighbours
 the walk reached separately, which is what makes the picture a graph and not a
-tree.
+tree. The walk still travels *through* an excluded node, so a match sitting
+behind one is reached: with `--type import`, a file whose function imports `fmt`
+still shows `fmt` at depth 2, even though the function in between is filtered
+out of the drawing.
 
 Output is deterministic: the same graph renders byte-identically every run, so a
 diagram can be committed and diffed. When `--limit` cuts the walk short, the

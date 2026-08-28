@@ -332,6 +332,23 @@ func TestFederationOrder(t *testing.T) {
 		t.Errorf("subset order = %v, want %s", got, want)
 	}
 
+	// A name repeated in Layers, or a layer sharing the scope's own name, must
+	// appear once. A duplicate would load the same database twice and then run
+	// the ID-collision rename path against that database's own nodes.
+	//
+	// The surviving copy keeps the HIGHER-priority slot: layers are walked in
+	// reverse config order, so the later listing of "a" is reached first and
+	// the earlier one is skipped. "estate" as a layer collides with the scope
+	// itself and drops entirely.
+	dup := &ScopeConfig{Name: "estate", Layers: []string{"a", "b", "a", "estate"}}
+	got, err = federationOrder(FederatedGraphOptions{Scope: dup})
+	if err != nil {
+		t.Fatalf("federationOrder: %v", err)
+	}
+	if want := "estate,a,b"; strings.Join(got, ",") != want {
+		t.Errorf("deduped order = %v, want %s", got, want)
+	}
+
 	// A layer this scope does not federate with is an error, not a silent drop.
 	_, err = federationOrder(FederatedGraphOptions{Scope: scope, OnlyLayers: []string{"a", "nope"}})
 	if err == nil {

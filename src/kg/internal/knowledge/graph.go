@@ -272,7 +272,9 @@ func (g *Graph) Subgraph(opts GraphOptions) (Subgraph, error) {
 	selected := make(map[string]GraphNode)
 
 	// admit adds a node if it passes the type filter and there is room, and
-	// reports whether it is now in the result.
+	// reports whether it is now in the result. It decides membership only —
+	// whether the walk continues *through* a node is a separate question, see
+	// walk.
 	admit := func(id string, depth int) bool {
 		if _, ok := selected[id]; ok {
 			return true
@@ -294,10 +296,17 @@ func (g *Graph) Subgraph(opts GraphOptions) (Subgraph, error) {
 		return true
 	}
 
+	// full reports that the node budget is spent, which is the one condition
+	// that should stop the walk early: with nothing left to admit, expanding
+	// further would tour the rest of the graph to no effect.
+	full := func() bool {
+		return opts.MaxNodes > 0 && len(selected) >= opts.MaxNodes
+	}
+
 	if opts.RootID == "" {
 		g.selectAll(admit)
 	} else {
-		g.walk(opts.RootID, opts.Depth, dir, relTypes, admit)
+		g.walk(opts.RootID, opts.Depth, dir, relTypes, admit, full)
 	}
 
 	sub.Nodes = make([]GraphNode, 0, len(selected))
@@ -327,7 +336,7 @@ func (g *Graph) selectAll(admit func(string, int) bool) {
 // Neighbours are visited in sorted order, which matters for more than tidy
 // output: when MaxNodes truncates the walk, the order decides which nodes
 // survive, and an unstable order would mean a different picture each run.
-func (g *Graph) walk(rootID string, depth int, dir Direction, relTypes map[string]bool, admit func(string, int) bool) {
+func (g *Graph) walk(rootID string, depth int, dir Direction, relTypes map[string]bool, admit func(string, int) bool, full func() bool) {
 	if !admit(rootID, 0) {
 		return
 	}
@@ -342,9 +351,15 @@ func (g *Graph) walk(rootID string, depth int, dir Direction, relTypes map[strin
 					continue
 				}
 				visited[neighbour] = true
-				if admit(neighbour, hop) {
-					next = append(next, neighbour)
+				// Admission and reachability are separate decisions. A node the
+				// type filter rejects is still a legitimate route to nodes that
+				// pass it — --type documents itself as excluding nodes from the
+				// drawing, not as pruning the walk the way --rel does — so the
+				// traversal continues through it either way.
+				if !admit(neighbour, hop) && full() {
+					return
 				}
+				next = append(next, neighbour)
 			}
 		}
 		frontier = next
