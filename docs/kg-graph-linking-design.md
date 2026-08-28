@@ -1,6 +1,6 @@
 # Cross-layer entity linking for `kg graph` — Design Proposal
 
-**Status:** proposal (not yet implemented) · **Date:** 2026-08-26 · **Follows:** PR #5 (`kg graph`), PR #6 (`--federated`)
+**Status:** proposal (not yet implemented; measurement gate run and passed) · **Date:** 2026-08-26 · **Follows:** PR #5 (`kg graph`), PR #6 (`--federated`)
 
 How to make a federated entity-relationship graph say something true. `--federated`
 (PR #6) merges a scope and its layers into one graph; this proposal fixes *what
@@ -96,21 +96,57 @@ than a fused node:
 (file in A) --IMPORTS--> (import:@depop/foo in A)  ==>  A's file --DEPENDS_ON--> B's package
 ```
 
+**Matching rule (set by measurement — see below): longest namespace-prefix match.**
+An import resolves to the longest `package` name that is a dotted prefix of it, with
+a minimum of three segments so that `com.depop` cannot claim every JVM import in the
+estate.
+
 Rules:
 
-- Match on exact package name. No prefix or fuzzy matching in v1.
+- Longest-prefix wins; minimum three segments; ties are impossible by construction.
+- **Ambiguity is skipped, not guessed.** If the matched package name is defined in
+  more than one layer, no edge is drawn and the name is reported. This is not a rare
+  path: it discards 74% of otherwise-matching imports (below).
 - The synthesised edge is typed `DEPENDS_ON` and marked as **derived**, so a reader
   can tell it from a relation an indexer wrote. Derived edges are dashed in mermaid
   and DOT.
 - Self-links (an import resolving to a package in the same layer) are dropped —
   that structure is already in the layer's own graph.
-- Ambiguity (the same package name defined in two layers) is reported and skipped,
-  not guessed.
 
-**This needs measuring before implementation.** The estate holds 5,996 `package`
-entities and 66,878 `import` entities; how many imports resolve to a package in
-another layer is unknown, and if the answer is near zero the feature is not worth
-building as specified. That measurement is the first task, not the first commit.
+### Measurement gate — result
+
+Run against the 61-layer estate (5,138 distinct package names, 50,993 distinct import
+names) before writing any of the above. The gate was: does import→package resolution
+find anything real?
+
+| Rule | Cross-layer matches | Unambiguous |
+|---|---|---|
+| Exact name match (the original v1 proposal) | 71 | 25 |
+| Dotted prefix, min 3 segments | 3,204 | **845** |
+| Slash prefix (npm / Go), min 2 segments | 0 | 0 |
+
+**Exact matching fails.** Its 71 hits are generic package fragments — `api`, `auth`,
+`client`, `clients`, `app` — and `clients` alone is "defined in" 40 layers. It
+reproduces the boilerplate problem one level up.
+
+**Prefix matching passes, and finds real dependencies:**
+
+```
+com.depop.auth.client.AccessToken       imported in [ads, attribution] -> package com.depop.auth.client in [libraries]
+com.depop.auth.client.AuthClient        imported in [martech, user]    -> package com.depop.auth.client in [libraries]
+com.depop.auth.client.ClientCredentials imported in [engage, feature]  -> package com.depop.auth.client in [libraries]
+```
+
+Services depending on the shared auth client. The resulting layer pairs are a
+plausible dependency map rather than a name-coincidence map: `libraries—mobileapi`
+(174), `clients—product` (151), `libraries—product` (102), `libraries—search` (83),
+`libraries—user` (80).
+
+**Slash-separated ecosystems get nothing, and the reason is upstream.** Not one of
+the 5,138 `package` entity names contains a `/` — the indexers never mint package
+entities for npm or Go module paths, so the 8,690 slash-style import names have
+nothing to resolve against. This is a limitation of what is indexed, not of the
+matching rule; see [Follow-up](#follow-up).
 
 ### 3. Provenance on every edge
 
@@ -163,11 +199,21 @@ kg graph --federated --no-derived                       # only relations an inde
 
 ## Acceptance
 
-Re-run the measurement above. The success condition is not "more edges" — it is that
+Re-run the measurement. The success condition is not "more edges" — it is that
 **every surviving cross-layer relation can be traced to a package an import names**,
 and the count of name-coincidence edges is zero under default settings.
 
+Expected yield on the estate: roughly **845 derived `DEPENDS_ON` edges**, replacing
+67,263 manufactured ones. Two orders of magnitude fewer edges, and each one
+explicable.
+
 ## Follow-up
+
+**Package entities for npm and Go.** The measurement shows the indexers mint
+`package` entities only for dotted namespaces. Reading `package.json` `name` fields
+and `go.mod` module paths would extend cross-layer linking to the web, client and
+tooling layers, which today get no derived edges at all. That is an indexer change,
+independent of this proposal and probably larger than it.
 
 Once edges are real, aggregation becomes worth building — `--rollup layer|package`,
 collapsing the graph to a granularity a person can read (tens of nodes, weighted
@@ -177,15 +223,19 @@ and not first.
 
 ## Open questions
 
-1. **Does package linking find anything?** See the measurement gate in §2. If
-   cross-layer import→package resolution is rare, the alternative is to accept that
-   layers are disconnected and make `--federated` a *comparison* tool (find the same
-   name across repos) rather than a connection tool.
-2. **Naming conventions across ecosystems.** `@depop/foo` (npm), `com.depop.foo`
-   (JVM), and a bare Go module path are three different shapes; v1 matches exact
-   names only, which may under-match on JVM layers.
-3. **Should `type` join by default?** `AddressClient` argues yes, `CodingKeys` argues
-   no. Proposal: off, revisited with data once §2 is measured.
+1. ~~Does package linking find anything?~~ **Answered by the gate:** yes, with
+   prefix matching (845 unambiguous cross-layer edges); no, with exact matching (71,
+   mostly generic). The matching rule in §2 changed accordingly.
+2. ~~Naming conventions across ecosystems.~~ **Answered:** dotted namespaces resolve;
+   npm and Go produce nothing because no package entity name contains a `/`. Fixing
+   that is an indexer change — see [Follow-up](#follow-up).
+3. **Is 74% ambiguity acceptable?** Prefix matching finds 3,204 cross-layer
+   resolutions but only 845 survive the "package defined in exactly one layer" rule.
+   The discarded ones are mostly packages genuinely duplicated across repos. Options:
+   accept the loss, draw them to all candidate layers with a marker, or rank by layer
+   priority. Proposal: accept the loss in v1 and report the count.
+4. **Should `type` join by default?** `AddressClient` argues yes, `CodingKeys` argues
+   no. Proposal: off, revisited once derived edges exist and can be compared against.
 
 ## See also
 
