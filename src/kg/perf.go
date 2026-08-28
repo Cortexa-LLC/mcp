@@ -43,12 +43,12 @@ type perfReport struct {
 }
 
 type perfSummary struct {
-	Count            int     `json:"count"`
-	AvgTurns         float64 `json:"avg_turns"`
-	AvgTokens        float64 `json:"avg_tokens"`
-	AvgExploration   float64 `json:"avg_exploration_ratio"`
-	ErrorRate        float64 `json:"error_rate"`
-	AvgDurationMs    float64 `json:"avg_duration_ms"`
+	Count          int     `json:"count"`
+	AvgTurns       float64 `json:"avg_turns"`
+	AvgTokens      float64 `json:"avg_tokens"`
+	AvgExploration float64 `json:"avg_exploration_ratio"`
+	ErrorRate      float64 `json:"error_rate"`
+	AvgDurationMs  float64 `json:"avg_duration_ms"`
 }
 
 var perfJsonFlag bool

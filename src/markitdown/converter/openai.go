@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	openaiAPIURL     = "https://api.openai.com/v1/chat/completions"
-	openaiMaxTokens  = 500
-	openaiTimeout    = 30 * time.Second
-	imagePrompt      = "Describe this image in detail. If it contains text, include the text. If it's a diagram or chart, explain what it shows."
+	openaiAPIURL    = "https://api.openai.com/v1/chat/completions"
+	openaiMaxTokens = 500
+	openaiTimeout   = 30 * time.Second
+	imagePrompt     = "Describe this image in detail. If it contains text, include the text. If it's a diagram or chart, explain what it shows."
 )
 
 // OpenAIClient handles requests to the OpenAI Vision API.
@@ -47,20 +47,20 @@ func NewOpenAIClient(apiKey, model string) *OpenAIClient {
 
 // openaiRequest is the structure for OpenAI Vision API requests.
 type openaiRequest struct {
-	Model    string          `json:"model"`
-	Messages []openaiMessage `json:"messages"`
-	MaxTokens int            `json:"max_tokens"`
+	Model     string          `json:"model"`
+	Messages  []openaiMessage `json:"messages"`
+	MaxTokens int             `json:"max_tokens"`
 }
 
 type openaiMessage struct {
-	Role    string               `json:"role"`
-	Content []openaiContentPart  `json:"content"`
+	Role    string              `json:"role"`
+	Content []openaiContentPart `json:"content"`
 }
 
 type openaiContentPart struct {
-	Type     string           `json:"type"`
-	Text     string           `json:"text,omitempty"`
-	ImageURL *openaiImageURL  `json:"image_url,omitempty"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *openaiImageURL `json:"image_url,omitempty"`
 }
 
 type openaiImageURL struct {

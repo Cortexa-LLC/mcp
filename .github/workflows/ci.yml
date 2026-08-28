@@ -53,6 +53,18 @@ jobs:
           go-version-file: src/${{ matrix.module }}/go.mod
           cache-dependency-path: src/${{ matrix.module }}/go.sum
 
+      # First, because it is the cheapest signal and the most annoying one to
+      # discover after a long test run. `gofmt -l` prints offending files and
+      # exits 0 either way, so the emptiness of its output is the assertion.
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error title=gofmt::run 'gofmt -w' on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Build
         run: go build ./...
 
