@@ -1,6 +1,6 @@
 # Cross-layer entity linking for `kg graph` — Design Proposal
 
-**Status:** proposal (not yet implemented; measurement gate run and passed) · **Date:** 2026-08-26 · **Follows:** PR #5 (`kg graph`), PR #6 (`--federated`)
+**Status:** implemented · gate run and passed · **Date:** 2026-08-26 · **Follows:** PR #5 (`kg graph`), PR #6 (`--federated`)
 
 How to make a federated entity-relationship graph say something true. `--federated`
 (PR #6) merges a scope and its layers into one graph; this proposal fixes *what
@@ -203,9 +203,15 @@ Re-run the measurement. The success condition is not "more edges" — it is that
 **every surviving cross-layer relation can be traced to a package an import names**,
 and the count of name-coincidence edges is zero under default settings.
 
-Expected yield on the estate: roughly **845 derived `DEPENDS_ON` edges**, replacing
-67,263 manufactured ones. Two orders of magnitude fewer edges, and each one
-explicable.
+Yield on the estate, as implemented: **2,525 derived `DEPENDS_ON` edges**,
+replacing 67,263 manufactured ones.
+
+The gate predicted 845, and both numbers are right: 845 is the count of distinct
+import *names* that resolve, while 2,525 counts import *nodes* — the same name
+appears as a separate node in each layer that imports it, since imports join only
+across three layers or fewer. Verified by recomputing the rule independently
+against the shipped output: 2,525 = 2,525, and the name count reproduces 845
+exactly.
 
 ## Follow-up
 
