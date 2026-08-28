@@ -513,20 +513,34 @@ jobs:
           # empty and no way to tell why. The json envelope always carries
           # subtype / is_error / num_turns, which names the cause.
           RAW_JSON="$(mktemp)"
-          # --max-turns 40, not ai-pack's 15: verified by reproducing this
-          # locally that the reviewer burns all 15 turns on a diff this size
-          # and returns an empty result. 15 is sized for ai-pack's own PRs; a
-          # cap that is too low fails as a silent non-zero exit, not as a
-          # short review, so err high. num_turns is logged below — if real
-          # reviews start landing near 40, raise it again rather than
-          # wondering why the reviewer went quiet.
+          # --max-turns 120, not ai-pack's 15. Sized from four real runs, which
+          # show turn count tracks how far the reviewer wanders rather than how
+          # big the diff is:
+          #
+          #   PR   lines  turns  outcome
+          #   #8     584     24  approved
+          #   #5   2,704     35  posted a review     <- largest diff, fewest turns
+          #   #4     848     41  hit the 40 cap
+          #   #7     989     41  hit the 40 cap
+          #
+          # Two of four stopped exactly AT the cap, not near it, so the real
+          # ceiling is unknown and a snug cap is the wrong shape. The cap is a
+          # runaway guard, not a budget: reviews run on a subscription OAuth
+          # token, so the reported total_cost_usd is notional, and the binding
+          # limit is timeout-minutes above. At the observed ~6s/turn, 120 turns
+          # is ~12 minutes, well inside the 30-minute wall clock.
+          #
+          # Exceeding the cap fails as a silent non-zero exit rather than a
+          # short review, which is why erring high matters. num_turns is logged
+          # on every run — if reviews start landing near 120, raise it again
+          # rather than wondering why the reviewer went quiet.
           set +e
           claude -p "$PROMPT" \
             --model claude-sonnet-5 \
             --system-prompt-file "$SYSTEM_FILE" \
             --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Read,Glob" \
             --disallowedTools "Grep,Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.npm/**)" \
-            --max-turns 40 \
+            --max-turns 120 \
             --output-format json > "$RAW_JSON" 2> "$REVIEW_ERR"
           CLAUDE_RC=$?
           set -e
@@ -551,7 +565,7 @@ jobs:
             TURNS="$(jq -r '.num_turns // "?"' "$RAW_JSON" 2>/dev/null || echo '?')"
             case "$SUBTYPE" in
               error_max_turns|error_during_execution)
-                echo "::error title=Reviewer hit the turn cap::run ended as '${SUBTYPE}' after ${TURNS} turns with no final message — raise --max-turns (currently 40)." ;;
+                echo "::error title=Reviewer hit the turn cap::run ended as '${SUBTYPE}' after ${TURNS} turns with no final message — raise --max-turns (currently 120)." ;;
               *)
                 echo "::error title=Claude CLI failed::claude -p exited ${CLAUDE_RC}, subtype '${SUBTYPE}'; see the grouped output above." ;;
             esac
