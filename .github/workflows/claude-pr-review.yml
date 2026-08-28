@@ -335,7 +335,10 @@ jobs:
           {
             repository(owner: '"\"${OWNER}\""', name: '"\"${REPO_NAME}\""') {
               pullRequest(number: '"${PR_NUMBER}"') {
-                reviewThreads(first: 100) {
+                # last, not first: paired with reviews(last: 20) below, both
+                # should bias to the newest entries. `first` would drop the most
+                # recent inline comments once a PR passes 100 threads.
+                reviewThreads(last: 100) {
                   nodes {
                     isResolved path line
                     comments(first: 1) { nodes { body } }
@@ -612,12 +615,14 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      REPO: ${{ github.repository }}
+      OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
       IS_FORK_OR_DRAFT: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.draft }}
     steps:
       - name: Fail on request-changes verdict
@@ -626,8 +631,40 @@ jobs:
             echo "fork or draft PR — no automated review runs; verdict gate passes trivially"
             exit 0
           fi
-          STATE=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-            --jq '[.[] | select(.commit_id == env.HEAD_SHA)] | last | .state // "NONE"')
+          # GraphQL with `reviews(last: 50)`, NOT the REST reviews endpoint.
+          # REST returns reviews oldest-first, 30 per page, and `gh api` does
+          # not auto-paginate — verified: the endpoint yields exactly 30
+          # without --paginate. On a PR with more than 30 reviews (the bot
+          # posts one per synchronize, so that is reachable) the newest ones
+          # fall off the fetched page, the commit_id filter matches nothing,
+          # and `// "NONE"` lets the gate pass. This is the sole mechanism
+          # enforcing a request-changes block, so that failure mode is
+          # fail-OPEN — exactly the wrong direction for a merge gate.
+          #
+          # `last: 50` asks for the most recent reviews directly, so the
+          # current head's review is always in the response, in one request
+          # rather than a walk over the whole review history.
+          #
+          # A failed query aborts the step (`bash -e` on the assignment), which
+          # fails the check and blocks the merge. That direction is deliberate:
+          # a gate that cannot read the verdict must not pass.
+          #
+          # SC2016 is a false positive here: $owner/$name/$number are GraphQL
+          # variables and env.HEAD_SHA is a jq lookup, none of which the shell
+          # should expand.
+          # shellcheck disable=SC2016
+          STATE=$(gh api graphql \
+            -F owner="$OWNER" -F name="$REPO_NAME" -F number="$PR_NUMBER" \
+            -f query='
+              query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $number) {
+                    reviews(last: 50) { nodes { state commit { oid } } }
+                  }
+                }
+              }' \
+            --jq '[.data.repository.pullRequest.reviews.nodes[]
+                   | select(.commit.oid == env.HEAD_SHA)] | last | .state // "NONE"')
           echo "latest review state on $HEAD_SHA: $STATE"
           if [ "$STATE" = "CHANGES_REQUESTED" ]; then
             echo "::error title=Reviewer requested changes::the automated review on $HEAD_SHA requested changes — address the findings or push a fix to trigger a fresh review."
