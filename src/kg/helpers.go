@@ -83,7 +83,6 @@ func openStoreRO() (*knowledge.Store, string, error) {
 	return openStoreMode(true)
 }
 
-
 func openStoreMode(readOnly bool) (*knowledge.Store, string, error) {
 	return openStoreModeWithScope(readOnly, "")
 }
