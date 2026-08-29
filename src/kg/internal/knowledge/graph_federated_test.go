@@ -476,25 +476,42 @@ func TestLoadFederatedGraphReportsRemotesAsSkipped(t *testing.T) {
 // another layer, which is what makes the key joinable in the first place.
 func TestLoadFederatedGraphKeepsSameLayerNamesakesApart(t *testing.T) {
 	aiDir := t.TempDir()
-	// Two unrelated Config types in one layer, plus a Config in another so the
-	// (name, type) key counts as joinable.
+	// Two unrelated packages named "config" in one layer — internal/api/config
+	// and internal/worker/config, which is an ordinary Go layout — plus a
+	// "config" package in another layer so the (name, type) key is joinable.
+	// The type must be one DefaultJoinTypes actually joins: only package and
+	// import cross layers, so a type or file namesake never reaches this path.
 	seedLayer(t, aiDir, "payments", []string{"libs"},
 		fedEntity{name: "Root", entityType: EntityTypeFile},
-		fedEntity{name: "Config", entityType: EntityTypeType},
-		fedEntity{name: "Config", entityType: EntityTypeType})
+		fedEntity{name: "config", entityType: EntityTypePackage},
+		fedEntity{name: "config", entityType: EntityTypePackage})
 	seedLayer(t, aiDir, "libs", nil,
-		fedEntity{name: "Config", entityType: EntityTypeType})
+		fedEntity{name: "config", entityType: EntityTypePackage})
 
-	g, _ := loadFed(t, aiDir, "payments", 0)
+	g, report := loadFed(t, aiDir, "payments", 0)
+
+	// Guard the premise: if the join policy stops covering package, this test
+	// would pass for the wrong reason — nothing joins, so nothing can fuse.
+	joined := false
+	for _, jt := range report.JoinTypes {
+		if strings.EqualFold(jt, EntityTypePackage) {
+			joined = true
+		}
+	}
+	if !joined {
+		t.Fatalf("JoinTypes = %v, which does not include %s — this fixture no longer exercises joining",
+			report.JoinTypes, EntityTypePackage)
+	}
 
 	configs := 0
 	for _, n := range g.nodes {
-		if n.Name == "Config" {
+		if n.Name == "config" {
 			configs++
 		}
 	}
-	// payments' two stay separate; libs' joins onto one of them.
+	// payments' two stay separate; libs' joins onto one of them. 1 means the
+	// same-layer pair fused; 3 means nothing joined at all.
 	if configs != 2 {
-		t.Errorf("Config nodes = %d, want 2 — the two same-layer Configs were fused into one", configs)
+		t.Errorf("config nodes = %d, want 2 — 1 means the two same-layer packages fused, 3 means no join happened", configs)
 	}
 }
