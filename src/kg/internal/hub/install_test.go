@@ -3,8 +3,10 @@ package hub
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,5 +142,189 @@ func TestRegistryWriteFailureLeavesGraphUnchanged(t *testing.T) {
 	names, commit = searchNames(t, ts.URL, "g", "NewEntity")
 	if !contains(names, "NewEntity") || commit != commitB {
 		t.Errorf("retry did not install: commit = %q (want %q), results = %v", commit, commitB, names)
+	}
+}
+
+// A hard kill between install's two renames — `current` repointed, registry
+// not yet written — leaves search reading one commit's database with another
+// commit's ProjectID: HTTP 200 with zero results, permanently. Construction
+// reconciles: the registry write is the commit point, so `current` rolls
+// back to the registered commit and the graph answers again.
+func TestReconcileRollsBackInterruptedSeed(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("a", 40)
+	dbPath := buildFixtureDBFor(t, "ReconcileEntity", "proj-one", commit)
+	if err := pushFixtureFor(t, ts.URL, "recon", dbPath, commit, "proj-one"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	if names, _ := searchNames(t, ts.URL, "recon", "ReconcileEntity"); len(names) == 0 {
+		t.Fatal("fixture graph does not answer before the simulated crash")
+	}
+	ts.Close()
+
+	// Simulate the crash: a new commit directory exists and `current` points
+	// at it, but the process died before the registry recorded it. The empty
+	// directory doubles as a tripwire — if reconciliation does not roll back,
+	// the search below fails against the missing database rather than
+	// silently passing.
+	gdir := filepath.Join(dataDir, "graphs", "recon")
+	orphan := strings.Repeat("b", 40)
+	if err := os.MkdirAll(filepath.Join(gdir, orphan), 0o755); err != nil {
+		t.Fatalf("create orphan commit dir: %v", err)
+	}
+	if err := replaceSymlink(gdir, filepath.Join(gdir, "current"), orphan); err != nil {
+		t.Fatalf("repoint current: %v", err)
+	}
+
+	// Restart the hub over the same data dir.
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	if target, err := os.Readlink(filepath.Join(gdir, "current")); err != nil || target != commit {
+		t.Errorf("current -> %q (err %v), want rolled back to %q", target, err, commit)
+	}
+	names, gotCommit := searchNames(t, ts2.URL, "recon", "ReconcileEntity")
+	if len(names) == 0 || names[0] != "ReconcileEntity" {
+		t.Errorf("search after reconcile = %v, want [ReconcileEntity]", names)
+	}
+	if gotCommit != commit {
+		t.Errorf("served commit = %q, want %q", gotCommit, commit)
+	}
+}
+
+// A `current` symlink that is missing entirely — a partial copy, a restored
+// backup, an operator — is state the hub did not create, and leaving it
+// unrepaired is strictly worse than the split reconcile exists to fix: every
+// search 500s, permanently. The registry knows the answer, so construction
+// recreates the link.
+func TestReconcileRestoresMissingCurrent(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("c", 40)
+	dbPath := buildFixtureDBFor(t, "MissingCurrentEntity", "proj-mc", commit)
+	if err := pushFixtureFor(t, ts.URL, "mc", dbPath, commit, "proj-mc"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	ts.Close()
+
+	gdir := filepath.Join(dataDir, "graphs", "mc")
+	if err := os.Remove(filepath.Join(gdir, "current")); err != nil {
+		t.Fatalf("remove current: %v", err)
+	}
+
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	if target, err := os.Readlink(filepath.Join(gdir, "current")); err != nil || target != commit {
+		t.Fatalf("current -> %q (err %v), want restored to %q", target, err, commit)
+	}
+	if names, _ := searchNames(t, ts2.URL, "mc", "MissingCurrentEntity"); len(names) == 0 {
+		t.Error("graph does not answer after restoring a missing current symlink")
+	}
+}
+
+// registry.json is hand-editable, and a null entry unmarshals to a nil
+// *GraphInfo. reconcileInstalls runs in the constructor, so dereferencing it
+// there does not fail one request — it aborts `kg hub serve` before any graph
+// is served. The bad entry must be skipped, and every other graph must still
+// answer.
+func TestReconcileSurvivesNullRegistryEntry(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("d", 40)
+	dbPath := buildFixtureDBFor(t, "SurvivorEntity", "proj-null", commit)
+	if err := pushFixtureFor(t, ts.URL, "survivor", dbPath, commit, "proj-null"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	ts.Close()
+
+	// Hand-edit the registry to hold a null entry alongside the good one.
+	regPath := filepath.Join(dataDir, registryFile)
+	raw, err := os.ReadFile(regPath)
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	var reg map[string]map[string]any
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatalf("parse registry: %v", err)
+	}
+	reg["graphs"]["broken"] = nil
+	edited, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	if err := os.WriteFile(regPath, edited, 0o644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	// Construction must not panic...
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	// ...and the healthy graph must still be served.
+	if names, _ := searchNames(t, ts2.URL, "survivor", "SurvivorEntity"); len(names) == 0 {
+		t.Error("healthy graph stopped answering after a null registry entry was introduced")
+	}
+}
+
+// The constructor-time guard above is only half the hazard. A null entry for a
+// name a client actually asks for reaches the request handlers, where the
+// lookups checked `ok` but not the pointer — so `{"graphs":{"broken":null}}`
+// would panic on the first dereference rather than answering "unknown graph".
+//
+// Searching the null graph directly must fail cleanly, and searching a healthy
+// graph in the same request must be unaffected.
+func TestRequestHandlersSurviveNullRegistryEntry(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("e", 40)
+	dbPath := buildFixtureDBFor(t, "SurvivorEntity", "proj-null2", commit)
+	if err := pushFixtureFor(t, ts.URL, "survivor", dbPath, commit, "proj-null2"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	ts.Close()
+
+	regPath := filepath.Join(dataDir, registryFile)
+	raw, err := os.ReadFile(regPath)
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	var reg map[string]map[string]any
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatalf("parse registry: %v", err)
+	}
+	reg["graphs"]["broken"] = nil
+	edited, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	if err := os.WriteFile(regPath, edited, 0o644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	// Asking for the null graph by name must produce 404 "unknown graph".
+	//
+	// Asserting 404 specifically, not merely "not 200": net/http recovers a
+	// handler panic into a 500, so a weaker check passes whether the lookup is
+	// nil-safe or crashes. 404 is reachable only by the guard actually
+	// treating a null entry as absent.
+	resp, body := postJSON(t, ts2.URL+"/v1/graphs/broken/search", map[string]any{"query": "anything"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("null graph answered %d, want %d (unknown graph). A 500 means the "+
+			"handler panicked and net/http recovered it. Body: %s",
+			resp.StatusCode, http.StatusNotFound, strings.TrimSpace(string(body)))
+	}
+
+	// The healthy graph must still answer afterwards.
+	if names, _ := searchNames(t, ts2.URL, "survivor", "SurvivorEntity"); len(names) == 0 {
+		t.Error("healthy graph stopped answering after a null entry was requested")
 	}
 }

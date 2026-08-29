@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 	"github.com/spf13/cobra"
@@ -72,7 +73,7 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 	aiDir := filepath.Join(root, ".ai")
 	projectID := projectIDFromCwd(root)
 
-	dbPath, scopeName, err := resolveHealthDB(aiDir, scopeName)
+	dbPath, scopeName, err := resolveScopeDB(aiDir, scopeName)
 	if err != nil {
 		return err
 	}
@@ -121,15 +122,29 @@ func runHealth(root, scopeName string, jsonOut bool, out io.Writer) error {
 	return nil
 }
 
-// resolveHealthDB resolves the database path: explicit scope, else the
-// default scope, else the legacy knowledge.db. Returns the path and the scope
-// name actually used ("" for legacy). This mirrors `kg stats` with one
-// deliberate divergence: stats silently falls back to the legacy database
-// when a named scope cannot be loaded, health errors (see below).
-// A named scope that cannot be loaded is an error, never a silent fallback —
-// reporting the legacy database's health under a scope the user asked for
-// would be a wrong answer, not a degraded one.
-func resolveHealthDB(aiDir, scopeName string) (string, string, error) {
+// resolveScopeDB resolves the database path for the read-only report commands
+// (kg health, kg stats): the scope the user named, else the configured default
+// scope, else the legacy knowledge.db. Returns the path and the scope name
+// actually used ("" for legacy).
+//
+// The two sources of a scope name are held to different standards, which is
+// why requested is separate from the default rather than pre-resolved by the
+// caller:
+//
+//   - A scope the user NAMED that cannot be loaded is always an error.
+//     Reporting the legacy database under a scope someone asked for by name is
+//     a wrong answer, not a degraded one.
+//   - A default scope inherited from config.json falls back to the legacy
+//     database when the project has no scope configs at all. config.json
+//     travels with a repo and SetDefaultScope does not verify the scope
+//     exists, so a stale defaultScope naming nothing is a configuration
+//     leftover, not a request — failing there would break `kg stats` in
+//     repositories where it used to work.
+//
+// A default scope in a project that DOES have scope configs still errors: the
+// scopes are real, so a default naming a missing one is a genuine mistake.
+func resolveScopeDB(aiDir, requested string) (string, string, error) {
+	scopeName := requested
 	if scopeName == "" {
 		defaultScope, err := knowledge.GetDefaultScope(aiDir)
 		if err != nil {
@@ -139,6 +154,16 @@ func resolveHealthDB(aiDir, scopeName string) (string, string, error) {
 	}
 	if scopeName == "" {
 		return filepath.Join(aiDir, "knowledge.db"), "", nil
+	}
+
+	if requested == "" {
+		configs, err := knowledge.ListScopeConfigs(aiDir)
+		if err != nil {
+			return "", "", err
+		}
+		if len(configs) == 0 {
+			return filepath.Join(aiDir, "knowledge.db"), "", nil
+		}
 	}
 
 	cfg, err := knowledge.LoadScopeConfig(aiDir, scopeName)
@@ -220,6 +245,12 @@ func printHealth(out io.Writer, o healthOutput, snapPath string) {
 		fmt.Fprintf(out, "\nNo previous snapshot — growth will be reported from the next run.\n")
 	}
 
+	if oa := o.Current.ObservationAge; oa != nil {
+		gen := o.Current.GeneratedAt
+		fmt.Fprintf(out, "\nObservation age: newest %s, median %s, oldest %s\n",
+			humanAge(gen.Sub(oa.Newest)), humanAge(gen.Sub(oa.Median)), humanAge(gen.Sub(oa.Oldest)))
+	}
+
 	share := 0.0
 	if o.Current.Observations > 0 {
 		share = float64(o.Current.ZeroTimestampObservations) / float64(o.Current.Observations) * 100
@@ -230,6 +261,34 @@ func printHealth(out io.Writer, o healthOutput, snapPath string) {
 	fmt.Fprintf(out, "[OBSOLETE-marked observations:                     %d\n", o.Current.ObsoleteObservations)
 
 	fmt.Fprintf(out, "\nSnapshot written to %s\n", snapPath)
+}
+
+// humanAge renders a duration as a coarse age ("3h", "2d", "5mo") for the
+// observation-age line; precision beyond this is noise in a health report.
+func humanAge(d time.Duration) string {
+	const (
+		day   = 24 * time.Hour
+		month = 30 * day
+		year  = 12 * month // 360d, so the ladder never prints "12mo" before "1y"
+	)
+	switch {
+	case d < 0:
+		// A stored timestamp ahead of the report's own clock: skew between
+		// machines pushing to a shared hub graph, or a hand-set created_at.
+		return "in the future"
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < day:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < month:
+		return fmt.Sprintf("%dd", int(d/day))
+	case d < year:
+		return fmt.Sprintf("%dmo", int(d/month))
+	default:
+		return fmt.Sprintf("%dy", int(d/year))
+	}
 }
 
 // formatEntityTypes renders the by-type counts sorted by count descending,
