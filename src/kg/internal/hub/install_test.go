@@ -270,3 +270,61 @@ func TestReconcileSurvivesNullRegistryEntry(t *testing.T) {
 		t.Error("healthy graph stopped answering after a null registry entry was introduced")
 	}
 }
+
+// The constructor-time guard above is only half the hazard. A null entry for a
+// name a client actually asks for reaches the request handlers, where the
+// lookups checked `ok` but not the pointer — so `{"graphs":{"broken":null}}`
+// would panic on the first dereference rather than answering "unknown graph".
+//
+// Searching the null graph directly must fail cleanly, and searching a healthy
+// graph in the same request must be unaffected.
+func TestRequestHandlersSurviveNullRegistryEntry(t *testing.T) {
+	dataDir := t.TempDir()
+	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+
+	commit := strings.Repeat("e", 40)
+	dbPath := buildFixtureDBFor(t, "SurvivorEntity", "proj-null2", commit)
+	if err := pushFixtureFor(t, ts.URL, "survivor", dbPath, commit, "proj-null2"); err != nil {
+		t.Fatalf("push fixture: %v", err)
+	}
+	ts.Close()
+
+	regPath := filepath.Join(dataDir, registryFile)
+	raw, err := os.ReadFile(regPath)
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	var reg map[string]map[string]any
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatalf("parse registry: %v", err)
+	}
+	reg["graphs"]["broken"] = nil
+	edited, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	if err := os.WriteFile(regPath, edited, 0o644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	defer ts2.Close()
+
+	// Asking for the null graph by name must produce 404 "unknown graph".
+	//
+	// Asserting 404 specifically, not merely "not 200": net/http recovers a
+	// handler panic into a 500, so a weaker check passes whether the lookup is
+	// nil-safe or crashes. 404 is reachable only by the guard actually
+	// treating a null entry as absent.
+	resp, body := postJSON(t, ts2.URL+"/v1/graphs/broken/search", map[string]any{"query": "anything"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("null graph answered %d, want %d (unknown graph). A 500 means the "+
+			"handler panicked and net/http recovered it. Body: %s",
+			resp.StatusCode, http.StatusNotFound, strings.TrimSpace(string(body)))
+	}
+
+	// The healthy graph must still answer afterwards.
+	if names, _ := searchNames(t, ts2.URL, "survivor", "SurvivorEntity"); len(names) == 0 {
+		t.Error("healthy graph stopped answering after a null entry was requested")
+	}
+}

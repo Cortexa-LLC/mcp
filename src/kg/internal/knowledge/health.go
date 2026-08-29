@@ -180,13 +180,6 @@ func collectObservationAge(store *Store, projectID string) (*ObservationAge, err
 		return nil, err
 	}
 	if !result.HasNext() {
-		// Same race the median query below guards against, and the same
-		// answer: a writer deleted the rows between the count and this query.
-		//
-		// Falling through instead would leave Newest and Oldest at the zero
-		// time, which printHealth renders via humanAge(gen.Sub(oa.Newest)) as
-		// an age of roughly two thousand years — the precise "every graph
-		// reads as centuries old" symptom this metric was added to expose.
 		result.Close()
 		return nil, nil
 	}
@@ -195,15 +188,17 @@ func collectObservationAge(store *Store, projectID string) (*ObservationAge, err
 		result.Close()
 		return nil, err
 	}
-	if age.Newest, err = timeCell(row, 0); err != nil {
-		result.Close()
-		return nil, err
-	}
-	if age.Oldest, err = timeCell(row, 1); err != nil {
-		result.Close()
-		return nil, err
-	}
+	present, err := ageBoundsFromRow(row, age)
 	result.Close()
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		// The race the median query below also guards against: a writer
+		// deleted the rows between the count and this query. Reported as no
+		// age rather than an error — see that comment for why.
+		return nil, nil
+	}
 
 	// Median by position: the middle row (lower of the two for even counts)
 	// of the timestamped observations in created_at order.
@@ -246,11 +241,52 @@ func timeCell(row interface{ GetValue(uint64) (any, error) }, col uint64) (time.
 	if err != nil {
 		return time.Time{}, err
 	}
+	return timeValue(v)
+}
+
+// timeValue converts an already-read cell to a UTC time.
+func timeValue(v any) (time.Time, error) {
 	t, ok := v.(time.Time)
 	if !ok {
 		return time.Time{}, fmt.Errorf("timestamp cell has unexpected type %T", v)
 	}
 	return t.UTC(), nil
+}
+
+// ageBoundsFromRow reads the max/min row into age, reporting whether the bounds
+// were actually present.
+//
+// The absent case is NOT an empty result set. `RETURN max(...), min(...)` has
+// no GROUP BY, so it is a full aggregation: over zero matched rows Kuzu returns
+// exactly ONE row with both columns NULL (verified directly against the engine,
+// not assumed). Guarding with !HasNext() therefore never fires, and feeding
+// those NULLs to timeCell trips its type assertion and fails the whole run —
+// while `kg health` is documented to always exit 0, being a report and not a
+// gate. So a NULL here means "the rows went away", handled like the median
+// query's missing row.
+//
+// A non-NULL value of the wrong type stays a hard error: that is a real defect,
+// and timeCell exists precisely because these timestamps were once silently
+// zeroed.
+func ageBoundsFromRow(row interface{ GetValue(uint64) (any, error) }, age *ObservationAge) (bool, error) {
+	newestRaw, err := row.GetValue(0)
+	if err != nil {
+		return false, err
+	}
+	oldestRaw, err := row.GetValue(1)
+	if err != nil {
+		return false, err
+	}
+	if newestRaw == nil || oldestRaw == nil {
+		return false, nil
+	}
+	if age.Newest, err = timeValue(newestRaw); err != nil {
+		return false, err
+	}
+	if age.Oldest, err = timeValue(oldestRaw); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // countQuery runs a single-row count(*) query and returns the count.

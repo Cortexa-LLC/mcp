@@ -345,7 +345,7 @@ func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "load registry", err)
 		return
 	}
-	info, ok := reg.Graphs[name]
+	info, ok := reg.graph(name)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 		return
@@ -416,7 +416,7 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "load registry", err)
 		return
 	}
-	info, ok := reg.Graphs[name]
+	info, ok := reg.graph(name)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 		return
@@ -435,7 +435,12 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 		// whose search failed is logged and excluded, so the field never
 		// over-reports coverage.
 		for _, layer := range expandLayers(reg, name) {
-			layerResults, err := s.searchGraph(layer, reg.Graphs[layer], req.Query, req.Limit)
+			layerInfo, ok := reg.graph(layer)
+			if !ok {
+				log.Printf("layer search graph %q (layer of %q): registry entry missing or null — skipping", layer, name)
+				continue
+			}
+			layerResults, err := s.searchGraph(layer, layerInfo, req.Query, req.Limit)
 			if err != nil {
 				log.Printf("layer search graph %q (layer of %q): %v", layer, name, err)
 				continue
@@ -477,7 +482,7 @@ func expandLayers(reg *Registry, graph string) []string {
 	for depth := 0; len(queue) > 0 && depth < maxLayerExpansion; depth++ {
 		var next []string
 		for _, g := range queue {
-			info, ok := reg.Graphs[g]
+			info, ok := reg.graph(g)
 			if !ok {
 				continue
 			}
@@ -490,7 +495,7 @@ func expandLayers(reg *Registry, graph string) []string {
 					log.Printf("expand layers of %q: invalid layer name %q — skipping", graph, layer)
 					continue
 				}
-				if _, ok := reg.Graphs[layer]; !ok {
+				if _, ok := reg.graph(layer); !ok {
 					log.Printf("expand layers of %q: layer graph %q not on this hub — skipping", graph, layer)
 					continue
 				}
@@ -565,7 +570,7 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid graph name %q", name))
 				return
 			}
-			if _, ok := reg.Graphs[name]; !ok {
+			if _, ok := reg.graph(name); !ok {
 				writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 				return
 			}
@@ -575,7 +580,14 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 
 	out := make(map[string]any, len(names))
 	for _, name := range names {
-		info := reg.Graphs[name]
+		info, ok := reg.graph(name)
+		if !ok {
+			// Checked above when the name list was validated, so this only
+			// fires if the entry is null rather than absent — which would
+			// otherwise panic on info.Commit below.
+			out[name] = map[string]any{"error": "unknown graph"}
+			continue
+		}
 		results, err := s.searchGraph(name, info, req.Query, req.Limit)
 		if err != nil {
 			log.Printf("federated search graph %q: %v", name, err)
@@ -727,7 +739,7 @@ func (s *Server) checkGraphOwnership(name, repo, force string) error {
 		// let the seed proceed and fail later if it is going to.
 		return nil
 	}
-	existing, ok := reg.Graphs[name]
+	existing, ok := reg.graph(name)
 	if !ok || existing.Repo == "" || repo == "" || existing.Repo == repo {
 		return nil
 	}
