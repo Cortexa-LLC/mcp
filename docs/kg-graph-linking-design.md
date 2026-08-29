@@ -2,9 +2,39 @@
 
 **Status:** implemented · gate run and passed · **Date:** 2026-08-26 · **Follows:** PR #5 (`kg graph`), PR #6 (`--federated`)
 
-How to make a federated entity-relationship graph say something true. `--federated`
-(PR #6) merges a scope and its layers into one graph; this proposal fixes *what
-connects them*, because the current rule manufactures edges that nobody recorded.
+## Pending re-measurement
+
+> ⚠️ **Every estate figure in this document, and in the `--federated` section of
+> [kg-cli-reference.md](kg-cli-reference.md#kg-graph), was measured before JVM package
+> indexing shipped.**
+
+At the time, the only package entities `kg index` minted were Go's bare identifiers,
+which this proposal's specificity floor filters out — so the derived edges reported below
+cannot have come from an estate indexed by the binary that was current when they were
+written. They are retained as the record of what was reasoned about, not as current
+output.
+
+Re-deriving them needs the estate itself, on a machine running `kg` at `5211bc2` or
+later. This section is the single place tracking that: update the figures in place and
+delete this section when they are reproduced.
+
+| Figure | Value on record | Where |
+|---|---|---|
+| Estate size | 61 layers, 667,858 entities, 1,223,605 relations | this doc [§Problem](#problem); cli-ref (as 668k / 1.2M) |
+| Distinct package names / import names | 5,138 / 50,993 | this doc [§Measurement gate](#measurement-gate--result) |
+| Gate prediction — unambiguous cross-layer matches | 845 | this doc §Measurement gate, [§Acceptance](#acceptance), [§Open questions](#open-questions) |
+| Prefix-match resolutions before the one-layer rule | 3,204 | this doc §Open questions |
+| Derived `DEPENDS_ON` edges as implemented | **2,525** | this doc §Acceptance; cli-ref |
+| Ambiguous imports discarded | 3,359 | cli-ref |
+| Manufactured edges the rule replaced | 67,263 | this doc §Problem, §Acceptance |
+| Full-load cost | ~6 s, 1.2 GB resident | cli-ref |
+
+The package-name count and the derived-edge count should both **rise**: Java, Kotlin, and
+Scala layers contributed zero package entities to the numbers above and now contribute
+dotted namespaces, which is exactly what this rule resolves against. Note also that
+cli-ref's claim that “JVM, Scala and Kotlin layers get derived links” describes the
+intended behaviour and only became true with that indexing change — it is not what the
+measured binary did.
 
 ## Problem
 
@@ -206,11 +236,8 @@ and the count of name-coincidence edges is zero under default settings.
 Yield on the estate, as implemented: **2,525 derived `DEPENDS_ON` edges**,
 replacing 67,263 manufactured ones.
 
-> **These figures predate JVM package indexing and have not been reproduced
-> since.** They cannot have come from `kg index` as it shipped at the time —
-> the only package entities it minted were Go's undotted names, which this
-> rule filters out. Re-run the measurement against a freshly indexed estate
-> before treating the numbers as current.
+> These figures predate JVM package indexing — see
+> [Pending re-measurement](#pending-re-measurement) at the top of this document.
 
 The gate predicted 845, and both numbers are right: 845 is the count of distinct
 import *names* that resolve, while 2,525 counts import *nodes* — the same name
