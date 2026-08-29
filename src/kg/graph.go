@@ -121,6 +121,17 @@ Examples:
 			Limit:     graphLimit,
 		}
 
+		// Validate up front, before the store is opened. runGraph and
+		// runFederatedGraph both validate too — they are called directly by
+		// tests — but the federated path validated before opening anything
+		// while the non-federated path opened a store first, so
+		// `kg graph --format bogus` paid for a Kuzu open before failing.
+		// graphSettings.validate documents that a bad invocation "fails before
+		// any database is opened"; this is what makes that true of the command.
+		if _, _, err := settings.validate(); err != nil {
+			return err
+		}
+
 		var sub knowledge.Subgraph
 		var err error
 		if graphFederated {
@@ -354,7 +365,7 @@ func init() {
 	graphCmd.Flags().StringVar(&graphScope, "scope", "",
 		"Scope to render (default: default scope)")
 	graphCmd.Flags().BoolVar(&graphFederated, "federated", false,
-		"Render the scope together with every layer it federates with, joining shared identities across them")
+		"Render the scope together with every local layer it federates with, joining shared identities across them (remote hub layers are search-only)")
 	graphCmd.Flags().StringSliceVar(&graphLayers, "layer", nil,
 		"With --federated, restrict the load to these scopes instead of all layers")
 	graphCmd.Flags().IntVar(&graphMaxJoin, "join-max-layers", knowledge.DefaultMaxJoinLayers,

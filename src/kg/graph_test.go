@@ -329,3 +329,27 @@ func TestWriteFileAtomic(t *testing.T) {
 		t.Errorf("directory holds %v, want just the target file", names)
 	}
 }
+
+// A bad flag must fail before anything is opened. The federated path already
+// validated first; the non-federated path opened the store and only validated
+// inside runGraph, so `kg graph --format bogus` paid for a Kuzu open before
+// failing. The discriminator is which error comes back: the format error means
+// validation ran first, a project/store error means it did not.
+func TestGraphValidatesBeforeOpeningTheStore(t *testing.T) {
+	t.Chdir(t.TempDir()) // no project here, so a store open would fail loudly
+
+	graphFormat = "not-a-real-format"
+	t.Cleanup(func() { graphFormat = "mermaid" })
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := graphCmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("expected a validation failure")
+	}
+	if !strings.Contains(err.Error(), "unknown format") {
+		t.Errorf("error = %v, want the format validation error — anything else means the store was opened first", err)
+	}
+}

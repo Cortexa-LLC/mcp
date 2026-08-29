@@ -230,7 +230,7 @@ Error: "main" matches 2 entities — use an ID instead:
 | `--rel` | *(all)* | Only follow these relation types |
 | `--limit` | `200` | Maximum nodes; `0` for no limit |
 | `--output`, `-o` | *(stdout)* | Write to a file |
-| `--federated` | off | Render the scope together with every layer it federates with |
+| `--federated` | off | Render the scope together with every *local* layer it federates with |
 | `--layer` | *(all)* | With `--federated`, load only these scopes |
 | `--join-max-layers` | `3` | With `--federated`, the boilerplate guard (see below) |
 
@@ -256,7 +256,12 @@ for imports, rounded for topics. The `--root` node is outlined thicker.
 #### Federated rendering: `kg graph --federated`
 
 Ordinarily `kg graph` reads one database. `--federated` reads the scope and every
-layer it federates with, and merges them into a single graph:
+local layer it federates with, and merges them into a single graph:
+
+Remote hub layers (a scope's `remotes`) are **not** rendered: reading a layer's rows
+needs direct database access, and a hub layer is reached over HTTP. They federate into
+`kg search`, not into `kg graph`. Rather than quietly rendering less than you asked
+for, each one is reported as skipped alongside any local layer that failed to open.
 
 ```bash
 kg graph --federated --root AddressClient --depth 1     # across every layer

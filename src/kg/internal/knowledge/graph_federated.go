@@ -240,6 +240,19 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 		report.Layers = append(report.Layers, load)
 	}
 
+	// Remote hub layers federate into search but not into the graph: loading a
+	// layer's rows needs raw Cypher against a local *Store, and a remote layer
+	// is reached over HTTP. Dropping them silently would contradict what
+	// --federated promises ("every layer it federates with"), so they are
+	// reported exactly like a local layer that could not be read — the user
+	// sees a warning naming each one instead of a quietly smaller graph.
+	for _, name := range opts.Scope.Remotes {
+		report.Layers = append(report.Layers, LayerLoad{
+			Name:   "remote:" + name,
+			Failed: "remote hub layers federate into search only; kg graph reads local layers",
+		})
+	}
+
 	// Joined nodes accumulate layers in load order; sorting makes the rendered
 	// provenance stable.
 	for id, node := range merged.nodes {

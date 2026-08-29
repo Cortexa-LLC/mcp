@@ -364,3 +364,41 @@ func TestLoadFederatedGraphRequiresScope(t *testing.T) {
 		t.Error("expected an error when no scope is given")
 	}
 }
+
+// A scope's Remotes are hub layers that federate into search but cannot be
+// rendered: reading a layer's rows needs raw Cypher against a local *Store,
+// while a remote layer is reached over HTTP. Dropping them silently would make
+// --federated quietly render less than it claims, so each one is reported the
+// same way an unreadable local layer is.
+func TestLoadFederatedGraphReportsRemotesAsSkipped(t *testing.T) {
+	aiDir := t.TempDir()
+	seedLayer(t, aiDir, "estate", nil, fedEntity{name: "Root", entityType: EntityTypeFile})
+
+	scope, err := LoadScopeConfig(aiDir, "estate")
+	if err != nil {
+		t.Fatalf("LoadScopeConfig: %v", err)
+	}
+	scope.Remotes = []string{"platform-hub", "shared-hub"}
+
+	_, report, err := LoadFederatedGraph(FederatedGraphOptions{
+		AIDir: aiDir, Scope: scope, ProjectID: fedProject,
+	})
+	if err != nil {
+		t.Fatalf("LoadFederatedGraph: %v", err)
+	}
+
+	skipped := map[string]string{}
+	for _, l := range report.FailedLayers() {
+		skipped[l.Name] = l.Failed
+	}
+	for _, want := range []string{"remote:platform-hub", "remote:shared-hub"} {
+		reason, ok := skipped[want]
+		if !ok {
+			t.Errorf("report does not mention %s; remotes were dropped silently", want)
+			continue
+		}
+		if reason == "" {
+			t.Errorf("%s reported with no reason", want)
+		}
+	}
+}
