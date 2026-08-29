@@ -188,6 +188,147 @@ for an entity in the personal store.
 
 ---
 
+### `kg graph`
+
+Render part of the graph as a diagram — mermaid by default, Graphviz DOT, or JSON.
+
+```bash
+kg graph --root parseToken                       # neighbourhood, 2 hops, mermaid
+kg graph --root parseToken --depth 3             # wider
+kg graph --root Store --direction in             # what depends on Store
+kg graph --root main.go --rel CALLS,CONTAINS     # only those relations
+kg graph --type file,package --limit 60          # whole graph, structure only
+kg graph --format dot | dot -Tsvg -o graph.svg   # render an image
+kg graph --scope platform -o platform.mmd        # one scope, to a file
+kg graph --personal --format json                # personal store, machine-readable
+```
+
+**Start from a `--root`.** Without one the whole graph is rendered, and for a real
+project that is a hairball no renderer can help with — a few hundred entities is
+already too many to read. The unit that works is one entity and a hop or two
+around it, which is what `--root` plus `--depth` draws. Find a root with
+`kg search`.
+
+`--root` accepts an entity ID or a name. A name matching more than one entity is
+an error listing the candidates, because on a Go project `--root main` means both
+the function and the package and guessing would be worse than asking:
+
+```
+$ kg graph --root main
+Error: "main" matches 2 entities — use an ID instead:
+  main (function) function:main.go:main
+  main (package) package:main
+```
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--root`, `-r` | *(whole graph)* | Entity ID or name to centre on |
+| `--depth`, `-d` | `2` | Hops to follow from `--root` |
+| `--direction` | `both` | `out` = what this depends on, `in` = what depends on this |
+| `--format`, `-f` | `mermaid` | `mermaid`, `dot`, or `json` |
+| `--type` | *(all)* | Only these entity types; `--root` is always kept |
+| `--rel` | *(all)* | Only follow these relation types |
+| `--limit` | `200` | Maximum nodes; `0` for no limit |
+| `--output`, `-o` | *(stdout)* | Write to a file |
+| `--federated` | off | Render the scope together with every *local* layer it federates with |
+| `--layer` | *(all)* | With `--federated`, load only these scopes |
+| `--join-max-layers` | `3` | With `--federated`, the boilerplate guard (see below) |
+
+`--rel` constrains what the walk follows, not just what is drawn, so filtering to
+`CONTAINS` gives the containment tree rather than the same neighbourhood with
+arrows missing. `--type` works the other way: it excludes nodes, and relations
+between two surviving nodes are still drawn — including links between neighbours
+the walk reached separately, which is what makes the picture a graph and not a
+tree. The walk still travels *through* an excluded node, so a match sitting
+behind one is reached: with `--type import`, a file whose function imports `fmt`
+still shows `fmt` at depth 2, even though the function in between is filtered
+out of the drawing.
+
+Output is deterministic: the same graph renders byte-identically every run, so a
+diagram can be committed and diffed. When `--limit` cuts the walk short, the
+render says so in its header comment and on stderr — a truncated picture that
+looked complete would be worse than no picture.
+
+Entity types are drawn as distinguishable mermaid shapes: rectangle for files,
+stadium for functions, hexagon for types, subroutine for packages, parallelogram
+for imports, rounded for topics. The `--root` node is outlined thicker.
+
+#### Federated rendering: `kg graph --federated`
+
+Ordinarily `kg graph` reads one database. `--federated` reads the scope and every
+local layer it federates with, and merges them into a single graph:
+
+Remote hub layers (a scope's `remotes`) are **not** rendered: reading a layer's rows
+needs direct database access, and a hub layer is reached over HTTP. They federate into
+`kg search`, not into `kg graph`. Rather than quietly rendering less than you asked
+for, each one is reported as skipped alongside any local layer that failed to open.
+
+```bash
+kg graph --federated --root AddressClient --depth 1     # across every layer
+kg graph --federated --layer payments,libraries --root Charge
+kg graph --federated --join-max-layers 6 --root Deployment
+```
+
+Nodes are grouped into a mermaid `subgraph` per layer, so it stays legible which
+database each part of the picture came from.
+
+**Why this needs its own code path.** kg's federation is search-only by design —
+`SearchLayer` in `kglib/federated.go` merges query *results* and nothing
+enumerates entities across databases. Relations are also stored per-database, so
+a plain union of the layers would be a set of disconnected components. What
+connects them is joining identities across layers.
+
+**The join rule.** Two rows in two databases are the same node when their
+`(name, type)` match. That surfaces genuinely shared symbols, and equally
+surfaces the same name implemented separately in several services — often the
+more interesting answer:
+
+```
+$ kg graph --federated --layer clients,libraries,mobileapi,payments \
+    --root AddressClient --depth 1
+Federated 4 layer(s): 355429 node(s), 678308 relation(s).
+Joined 5016 identities across layers, merging 36967 duplicate row(s).
+```
+
+…which draws six separate `AddressClient` definitions across three layers,
+converging on one node.
+
+**The boilerplate guard.** An unguarded join is worse than no join. On a real
+59-layer estate the most widely shared names are markdown headings from a
+documentation template (`Service Overview`, `Deployment`, `Known Issues and
+Failure Modes`) and Helm values keys indexed as types (`accountName`,
+`environment`, `chart`) — several of them present in all 60 layers. Joining on
+those fuses every unrelated service into one hub and the picture stops meaning
+anything.
+
+So a `(name, type)` found in more than `--join-max-layers` layers (default 3) is
+read as boilerplate and left unjoined. The command says what it suppressed, so
+the threshold is inspectable rather than magic:
+
+```
+Left 5112 name(s) unjoined: they appear in more than 3 layers, which reads as
+boilerplate rather than one shared symbol. Raise --join-max-layers to join them
+anyway. Worst:
+  accountName (type) in 60 layers
+  environment (type) in 60 layers
+  jobs (type) in 60 layers
+```
+
+Two other things get reported to stderr because a merged graph would otherwise
+hide them: a layer that could not be opened (a warning, not a fatal error — a
+render missing one database is still useful, a silent hole is not), and nodes
+renamed because two layers minted the same ID for different things. Indexer IDs
+are repo-relative paths, so `import:..` legitimately means something different
+in every layer.
+
+**Cost.** Databases are read one at a time and released, so peak memory is the
+merged graph plus the largest single layer rather than all of them at once.
+Measured on a 61-layer estate — 668k entities, 1.2M relations — a full load is
+about 6 seconds and 1.2 GB resident. Use `--layer` to narrow it when you know
+which layers you care about.
+
+---
+
 ### `kg add entity`
 
 Manually add an entity to the graph. Useful for concepts, topics, or decisions
