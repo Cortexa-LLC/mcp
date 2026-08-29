@@ -36,6 +36,12 @@ type langConfig struct {
 	FuncNodeTypes   []string // node types that represent function/method definitions
 	TypeNodeTypes   []string // node types that represent class/struct/type definitions
 	ImportNodeTypes []string // node types that represent import statements
+	// PackageNodeTypes are node types that declare which package a file belongs
+	// to. Empty for languages with no package concept (C, JS/TS, Python).
+	PackageNodeTypes []string
+	// extractPackageName pulls the package's name from such a node. Defaults to
+	// extractPackageDeclName, which fits every language configured here.
+	extractPackageName func(node *sitter.Node, src []byte) string
 	// CallNodeTypes are node types representing a call site. Leave empty for
 	// languages whose grammar does not expose the callee reliably.
 	CallNodeTypes []string
@@ -90,6 +96,30 @@ func symbolVisibility(cfg langConfig, name string) string {
 
 // langRegistry maps lowercase file extensions (with leading dot) to langConfig.
 var langRegistry map[string]langConfig
+
+// extractPackageDeclName returns the package name declared by a package node.
+//
+// One extractor covers every language configured here, because each spells the
+// name as a single named child and they differ only in that child's type:
+//
+//	Go      package_clause      -> package_identifier   ("auth")
+//	Scala   package_clause      -> package_identifier   ("com.depop.auth")
+//	Java    package_declaration -> scoped_identifier    ("com.depop.auth")
+//	Kotlin  package_header      -> identifier           ("com.depop.auth")
+//
+// Node types were confirmed by parsing real sources rather than read off the
+// grammars. Go is the odd one only in what it yields: a bare identifier with no
+// dots, where the JVM languages give a dotted namespace.
+func extractPackageDeclName(node *sitter.Node, src []byte) string {
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		child := node.NamedChild(i)
+		switch child.Type() {
+		case "package_identifier", "scoped_identifier", "identifier":
+			return strings.TrimSpace(child.Content(src))
+		}
+	}
+	return ""
+}
 
 // extractFirstNamedChildOfType returns a function that scans named children for
 // the first node of the given type and returns its text content. Used for
@@ -215,10 +245,11 @@ func init() {
 		extractImportPath: extractCInclude,
 	}
 	ktCfg := langConfig{
-		Language:        kotlin.GetLanguage(),
-		FuncNodeTypes:   []string{"function_declaration"},
-		TypeNodeTypes:   []string{"class_declaration", "object_declaration", "interface_declaration"},
-		ImportNodeTypes: []string{"import_header"},
+		Language:         kotlin.GetLanguage(),
+		FuncNodeTypes:    []string{"function_declaration"},
+		TypeNodeTypes:    []string{"class_declaration", "object_declaration", "interface_declaration"},
+		ImportNodeTypes:  []string{"import_header"},
+		PackageNodeTypes: []string{"package_header"},
 		// Kotlin's call_expression exposes no field for the callee, so it needs
 		// the child-traversal extractor rather than the default.
 		CallNodeTypes:     []string{"call_expression"},
@@ -245,6 +276,7 @@ func init() {
 			FuncNodeTypes:        []string{"function_declaration", "method_declaration"},
 			TypeNodeTypes:        []string{"type_spec"},
 			ImportNodeTypes:      []string{"import_spec"},
+			PackageNodeTypes:     []string{"package_clause"},
 			CallNodeTypes:        []string{"call_expression"},
 			NameField:            "name",
 			extractFuncQualifier: extractGoReceiverType,
@@ -279,12 +311,13 @@ func init() {
 			},
 		},
 		".java": {
-			Language:        java.GetLanguage(),
-			FuncNodeTypes:   []string{"method_declaration", "constructor_declaration"},
-			TypeNodeTypes:   []string{"class_declaration", "interface_declaration", "enum_declaration"},
-			ImportNodeTypes: []string{"import_declaration"},
-			CallNodeTypes:   []string{"method_invocation"},
-			NameField:       "name",
+			Language:         java.GetLanguage(),
+			FuncNodeTypes:    []string{"method_declaration", "constructor_declaration"},
+			TypeNodeTypes:    []string{"class_declaration", "interface_declaration", "enum_declaration"},
+			ImportNodeTypes:  []string{"import_declaration"},
+			PackageNodeTypes: []string{"package_declaration"},
+			CallNodeTypes:    []string{"method_invocation"},
+			NameField:        "name",
 			extractImportPath: func(node *sitter.Node, src []byte) []string {
 				for i := 0; i < int(node.NamedChildCount()); i++ {
 					child := node.NamedChild(i)
@@ -334,6 +367,7 @@ func init() {
 			// the type aliases Scala services lean on heavily for domain modelling.
 			TypeNodeTypes:     []string{"class_definition", "object_definition", "trait_definition", "enum_definition", "type_definition"},
 			ImportNodeTypes:   []string{"import_declaration"},
+			PackageNodeTypes:  []string{"package_clause"},
 			CallNodeTypes:     []string{"call_expression"},
 			NameField:         "name",
 			extractImportPath: extractScalaImports,
@@ -343,6 +377,7 @@ func init() {
 			FuncNodeTypes:     []string{"function_definition", "function_declaration"},
 			TypeNodeTypes:     []string{"class_definition", "object_definition", "trait_definition", "enum_definition", "type_definition"},
 			ImportNodeTypes:   []string{"import_declaration"},
+			PackageNodeTypes:  []string{"package_clause"},
 			CallNodeTypes:     []string{"call_expression"},
 			NameField:         "name",
 			extractImportPath: extractScalaImports,
@@ -596,19 +631,17 @@ func (idx *Indexer) walkNode(
 	childQual := enclosingQual
 
 	switch {
-	case nodeType == "package_clause":
-		// Go package: child is package_identifier (not a named field "name")
-		for i := 0; i < int(node.ChildCount()); i++ {
-			child := node.Child(i)
-			if child.Type() == "package_identifier" {
-				pkgName := child.Content(src)
-				pkgID := fmt.Sprintf("package:%s", pkgName)
-				if writeEntity(entities, seenEntities, pkgID, pkgName, EntityTypePackage, idx.projectID, now) {
-					stats.EntitiesCreated++
-				}
-				*relations = append(*relations, relationRecord{FromID: fileID, ToID: pkgID, Type: RelBelongsTo})
-				break
+	case slices.Contains(cfg.PackageNodeTypes, nodeType):
+		extract := cfg.extractPackageName
+		if extract == nil {
+			extract = extractPackageDeclName
+		}
+		if pkgName := extract(node, src); pkgName != "" {
+			pkgID := fmt.Sprintf("package:%s", pkgName)
+			if writeEntity(entities, seenEntities, pkgID, pkgName, EntityTypePackage, idx.projectID, now) {
+				stats.EntitiesCreated++
 			}
+			*relations = append(*relations, relationRecord{FromID: fileID, ToID: pkgID, Type: RelBelongsTo})
 		}
 
 	case slices.Contains(cfg.FuncNodeTypes, nodeType):
