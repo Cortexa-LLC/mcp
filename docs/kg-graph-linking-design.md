@@ -206,6 +206,12 @@ and the count of name-coincidence edges is zero under default settings.
 Yield on the estate, as implemented: **2,525 derived `DEPENDS_ON` edges**,
 replacing 67,263 manufactured ones.
 
+> **These figures predate JVM package indexing and have not been reproduced
+> since.** They cannot have come from `kg index` as it shipped at the time —
+> the only package entities it minted were Go's undotted names, which this
+> rule filters out. Re-run the measurement against a freshly indexed estate
+> before treating the numbers as current.
+
 The gate predicted 845, and both numbers are right: 845 is the count of distinct
 import *names* that resolve, while 2,525 counts import *nodes* — the same name
 appears as a separate node in each layer that imports it, since imports join only
@@ -215,11 +221,26 @@ exactly.
 
 ## Follow-up
 
-**Package entities for npm and Go.** The measurement shows the indexers mint
-`package` entities only for dotted namespaces. Reading `package.json` `name` fields
-and `go.mod` module paths would extend cross-layer linking to the web, client and
-tooling layers, which today get no derived edges at all. That is an indexer change,
-independent of this proposal and probably larger than it.
+**Package entities for npm and Go.** What the indexers mint is now:
+
+| language | package entity | linkable |
+|---|---|---|
+| Java, Kotlin, Scala | dotted namespace (`com.depop.auth.client`) | yes |
+| Go | bare identifier (`auth`) | no — one segment, below the specificity floor |
+| TypeScript, JavaScript, Python, C/C++ | none | no |
+
+An earlier draft of this section had that backwards, saying the indexers mint
+package entities "only for dotted namespaces". The reverse was true when it was
+written: Go's `package_clause` was the *only* source, and a Go package name never
+contains a dot, so every package entity was filtered out and this proposal
+derived nothing from indexed data. JVM package declarations were not indexed at
+all until they were added separately (see the package-indexing change that
+precedes this one), which is what makes the rule above work.
+
+The remaining gap is npm and Go. Reading `package.json` `name` fields and
+`go.mod` module paths would give the web, client and tooling layers a namespace
+specific enough to link, where today they get no derived edges. That is an
+indexer change, independent of this proposal and probably larger than it.
 
 Once edges are real, aggregation becomes worth building — `--rollup layer|package`,
 collapsing the graph to a granularity a person can read (tens of nodes, weighted
