@@ -402,3 +402,37 @@ func TestLoadFederatedGraphReportsRemotesAsSkipped(t *testing.T) {
 		}
 	}
 }
+
+// Joining is a CROSS-database rule: "two rows in two databases are the same
+// node when their (name, type) match". Two distinct entities inside ONE layer
+// that happen to share a name must stay distinct — nothing dedupes (name,
+// type) within a database, since CreateEntity mints a fresh UUID per row, so a
+// Go codebase with an internal/api/Config and an internal/worker/Config is
+// ordinary rather than exotic.
+//
+// The hazard is that such a pair only fuses when the name ALSO appears in
+// another layer, which is what makes the key joinable in the first place.
+func TestLoadFederatedGraphKeepsSameLayerNamesakesApart(t *testing.T) {
+	aiDir := t.TempDir()
+	// Two unrelated Config types in one layer, plus a Config in another so the
+	// (name, type) key counts as joinable.
+	seedLayer(t, aiDir, "payments", []string{"libs"},
+		fedEntity{name: "Root", entityType: EntityTypeFile},
+		fedEntity{name: "Config", entityType: EntityTypeType},
+		fedEntity{name: "Config", entityType: EntityTypeType})
+	seedLayer(t, aiDir, "libs", nil,
+		fedEntity{name: "Config", entityType: EntityTypeType})
+
+	g, _ := loadFed(t, aiDir, "payments", 0)
+
+	configs := 0
+	for _, n := range g.nodes {
+		if n.Name == "Config" {
+			configs++
+		}
+	}
+	// payments' two stay separate; libs' joins onto one of them.
+	if configs != 2 {
+		t.Errorf("Config nodes = %d, want 2 — the two same-layer Configs were fused into one", configs)
+	}
+}

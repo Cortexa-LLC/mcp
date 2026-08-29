@@ -353,3 +353,33 @@ func TestGraphValidatesBeforeOpeningTheStore(t *testing.T) {
 		t.Errorf("error = %v, want the format validation error — anything else means the store was opened first", err)
 	}
 }
+
+// The headline count must describe layers that contributed, not entries in the
+// report: skipped locals and remote hub layers also live in report.Layers, so
+// counting all of them overstates how many databases were read.
+func TestPrintFederationReportCountsOnlyContributingLayers(t *testing.T) {
+	report := &knowledge.FederationReport{
+		Layers: []knowledge.LayerLoad{
+			{Name: "estate", Nodes: 4, Edges: 3},
+			{Name: "libs", Nodes: 2, Edges: 1},
+			{Name: "broken", Failed: "could not open"},
+			{Name: "remote:hub", Failed: "remote hub layers federate into search only"},
+		},
+	}
+
+	var errBuf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(&errBuf)
+	printFederationReport(cmd, report)
+
+	got := errBuf.String()
+	if !strings.Contains(got, "Federated 2 layer(s): 6 node(s), 4 relation(s).") {
+		t.Errorf("headline = %q, want it to count only the 2 contributing layers", got)
+	}
+	for _, want := range []string{"broken", "remote:hub"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report does not mention skipped layer %q:\n%s", want, got)
+		}
+	}
+}

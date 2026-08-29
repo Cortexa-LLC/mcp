@@ -308,12 +308,21 @@ func runFederatedGraph(cmd *cobra.Command, s graphSettings, out io.Writer) (know
 // to know — a layer that failed to open, and identities too widespread to
 // join — so both are said out loud rather than left to be inferred.
 func printFederationReport(cmd *cobra.Command, report *knowledge.FederationReport) {
-	nodes, edges := 0, 0
+	// Count only the layers that actually contributed. report.Layers also
+	// carries skipped entries — local layers that failed to open, and every
+	// remote hub layer — so len() would claim a scope with 2 local layers and
+	// 3 remotes "federated 6 layers" while showing the node and edge counts of
+	// 2. The warning lines below name what was skipped.
+	nodes, edges, contributing := 0, 0, 0
 	for _, l := range report.Layers {
+		if l.Failed != "" {
+			continue
+		}
+		contributing++
 		nodes += l.Nodes
 		edges += l.Edges
 	}
-	cmd.PrintErrf("Federated %d layer(s): %d node(s), %d relation(s).\n", len(report.Layers), nodes, edges)
+	cmd.PrintErrf("Federated %d layer(s): %d node(s), %d relation(s).\n", contributing, nodes, edges)
 
 	if report.Joined > 0 {
 		cmd.PrintErrf("Joined %d identit%s across layers, merging %d duplicate row(s).\n",

@@ -163,7 +163,19 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 		out:   make(map[string][]GraphEdge),
 		in:    make(map[string][]GraphEdge),
 	}
-	canonical := make(map[ntKey]string) // joined identity → the ID it kept
+	// canonical maps a joinable identity to the node that claimed it AND to the
+	// layer that node came from. The layer is what makes the rule correct:
+	// joining is a cross-database operation, so a row may only merge into this
+	// node when it arrives from a different layer. Two rows sharing a
+	// (name, type) inside ONE database are distinct entities that happen to
+	// share a name — nothing dedupes them there, since CreateEntity mints a
+	// fresh UUID per row — and fusing them would delete a real entity and
+	// redirect its edges onto an unrelated one.
+	type claim struct {
+		id    string
+		layer string
+	}
+	canonical := make(map[ntKey]claim)
 	seenEdge := make(map[GraphEdge]bool)
 
 	for _, name := range names {
@@ -181,11 +193,13 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 		for id, node := range layer.nodes {
 			key := ntKey{node.Name, node.Type}
 			if joinable[key] {
-				if existing, ok := canonical[key]; ok {
-					localID[id] = existing
-					target := merged.nodes[existing]
+				// existing.layer != name: a namesake from this same layer is a
+				// different entity, not the same one seen twice.
+				if existing, ok := canonical[key]; ok && existing.layer != name {
+					localID[id] = existing.id
+					target := merged.nodes[existing.id]
 					target.Layers = appendLayer(target.Layers, name)
-					merged.nodes[existing] = target
+					merged.nodes[existing.id] = target
 					report.MergedNodes++
 					continue
 				}
@@ -203,8 +217,14 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 			}
 
 			if joinable[key] {
-				canonical[key] = mergedID
-				report.Joined++
+				// Only the first node to claim the identity owns it; a
+				// same-layer namesake falling through to here must not steal
+				// the claim, or the layer guard above would compare against
+				// the wrong owner.
+				if _, claimed := canonical[key]; !claimed {
+					canonical[key] = claim{id: mergedID, layer: name}
+					report.Joined++
+				}
 			}
 			localID[id] = mergedID
 			node.ID = mergedID
