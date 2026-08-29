@@ -1,6 +1,12 @@
 # KG Shared Service — Design Proposal
 
-**Status:** proposal (not yet implemented) · **Date:** 2026-08-20
+**Status:** implemented through phase 4 · per-user auth built behind the pluggable
+verifier (`token`, `oidc`, `github`; `proxy` outstanding) · **Date:** 2026-08-20 ·
+**Last verified:** 2026-08-29
+
+Retained as the design record, not as a statement of pending work. See
+[Rollout phases](#rollout-phases) for what shipped and what is still open, and
+[kg-shared-service.md](kg-shared-service.md) for how to run and use the hub.
 
 A shared knowledge repository for teams: an opt-in network service (the **hub**) that
 hosts read-only knowledge graphs for a set of repositories and answers search queries in
@@ -390,13 +396,14 @@ independently of any OIDC work, and settles where CI gets the seed token for `kg
 Authorization granularity — whether an authenticated user reads every graph or only
 some — is deliberately left open. It depends on what the hub ends up holding, and the
 registry already records which repo owns each graph, so per-graph rules can be added
-without a schema change. The `Identity` type should carry groups from the start so that
-decision stays cheap.
+without a schema change. `Identity` carries `Groups` from the start, so that decision
+stays cheap.
 
-Nothing here is built. The useful first step, whenever the hub becomes real, is to thread
-an `Identity` through the request path and audit-log it, with the shared token as the
-degenerate implementation. That makes real SSO an additive change rather than a
-rearchitecture, which is the only thing "SSO-ready" can honestly mean.
+This sequencing is now largely built: `Identity` is threaded through the request path
+and the `Verifier` interface admits `token` (the shared token as the degenerate
+implementation), `oidc`, and `github` — `proxy` remains. Doing it in that order made real
+SSO an additive change rather than a rearchitecture, which is the only thing "SSO-ready"
+can honestly mean. Authorization granularity is still open.
 
 ## Migrating existing databases
 

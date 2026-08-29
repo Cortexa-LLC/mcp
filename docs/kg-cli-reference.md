@@ -386,6 +386,13 @@ or Go module paths — so JVM, Scala and Kotlin layers get derived links and
 JavaScript and Go layers get none. That is a gap in what is indexed rather than
 in the matching, and closing it is an indexer change.
 
+> ⚠️ **The figures in this section predate JVM package indexing and are pending
+> re-measurement** — including the 3,359/2,525 split above and the load cost below.
+> They were measured when Go was the only source of package entities, which the
+> specificity floor filters out. See
+> [kg-graph-linking-design.md § Pending re-measurement](kg-graph-linking-design.md#pending-re-measurement)
+> for the full list and what is expected to change.
+
 **Cost.** Databases are read one at a time and released, so peak memory is the
 merged graph plus the largest single layer rather than all of them at once.
 Measured on a 61-layer estate — 668k entities, 1.2M relations — a full load is

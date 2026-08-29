@@ -146,9 +146,13 @@ if preferred.
 | [docs/kg-cli-reference.md](docs/kg-cli-reference.md) | Full kg CLI reference — all commands, flags, entity types, Cypher examples |
 | [docs/kg-scopes.md](docs/kg-scopes.md) | Multi-scope monorepo graphs and federated (layered) search — configuration and commands |
 | [docs/kg-scopes-implementation.md](docs/kg-scopes-implementation.md) | How scopes and federation are implemented internally |
+| [docs/kg-graph-linking-design.md](docs/kg-graph-linking-design.md) | Design and measurement behind cross-layer entity linking in `kg graph --federated` — why the old `(name, type)` join was wrong and what replaced it |
 | [docs/kg-personal-store.md](docs/kg-personal-store.md) | The personal knowledge store — creating it, writing to it, and federating it into project searches |
 | [docs/kg-shared-service.md](docs/kg-shared-service.md) | The shared knowledge hub — running it, seeding it with `kg push`, and searching hub graphs from other projects via `remotes` |
+| [docs/kg-shared-service-design.md](docs/kg-shared-service-design.md) | The hub's original design proposal — architecture, threat model, and hosting options |
 | [src/kglib/README.md](src/kglib/README.md) | kglib library API, including `FederatedStore` merge semantics |
 | [skills/README.md](skills/README.md) | Claude Code skills built on these servers, and how to install them |
+| [docs/kg-log-plugins.md](docs/kg-log-plugins.md) | Log-file indexing plugins — how a plugin is matched to a log format, and how to add one |
 | [docs/kg-claude-integration.md](docs/kg-claude-integration.md) | KG patterns for CLAUDE.md, reducing re-investigation, decision logging, cross-session checkpointing |
 | [docs/markitdown-claude-integration.md](docs/markitdown-claude-integration.md) | Reading PDFs, DOCX, spreadsheets, and URLs; combining with the KG |
+| [CHANGELOG.md](CHANGELOG.md) | Notable changes since `v0.1.0` |
