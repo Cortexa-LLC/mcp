@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -20,6 +21,14 @@ type HealthMetrics struct {
 	// real timestamps (see timeOrZero for the read-side bug this survived), so
 	// a non-zero count here means some other or older writer produced the rows.
 	ZeroTimestampObservations int `json:"zero_timestamp_observations"`
+
+	// ObservationAge summarizes stored created_at across observations that
+	// carry a real timestamp (ADR-009: newest/oldest/median observation age).
+	// Zero-timestamp rows are excluded — they are what
+	// ZeroTimestampObservations counts, and including them would report every
+	// legacy-bearing graph as centuries old. Nil when no timestamped
+	// observations exist.
+	ObservationAge *ObservationAge `json:"observation_age,omitempty"`
 
 	// OrphanedEntities counts entities with no observations and no relations
 	// in either direction — nodes nothing points at and that say nothing.
@@ -98,6 +107,10 @@ func CollectHealthMetrics(store *Store, projectID string) (*HealthMetrics, error
 		return nil, fmt.Errorf("count zero-timestamp observations: %w", err)
 	}
 
+	if m.ObservationAge, err = collectObservationAge(store, projectID); err != nil {
+		return nil, fmt.Errorf("collect observation age: %w", err)
+	}
+
 	// The unlabeled patterns match every relationship table, HAS_OBSERVATION
 	// included, so one predicate covers "no observations AND no relations".
 	m.OrphanedEntities, err = countQuery(store, `
@@ -119,6 +132,161 @@ func CollectHealthMetrics(store *Store, projectID string) (*HealthMetrics, error
 	}
 
 	return m, nil
+}
+
+// ObservationAge holds the stored created_at of the newest, oldest, and
+// median timestamped observation. Timestamps rather than durations, so the
+// values are stable in snapshots; the CLI renders them as ages.
+type ObservationAge struct {
+	Newest time.Time `json:"newest"`
+	Oldest time.Time `json:"oldest"`
+	Median time.Time `json:"median"`
+}
+
+// timestampedObsFilter excludes NULL and stored-zero created_at rows — the
+// same literal-not-parameter rule as the zero-timestamp count above.
+const timestampedObsFilter = `o.created_at IS NOT NULL AND o.created_at <> timestamp("0001-01-01 00:00:00")`
+
+// collectObservationAge computes newest/oldest/median stored created_at over
+// the project's timestamped observations. Nil when there are none.
+//
+// The count driving the median's offset is taken here, over the same
+// predicate as the median query itself, rather than derived by the caller
+// from the total and zero-timestamp counts. Those agree in a quiet database,
+// but they are separate queries on a read-only connection with no snapshot
+// across them: a concurrent `kg index` deleting rows in between would make
+// the offset overshoot the result set, and an off-by-one there silently
+// shifts the median. One predicate, one count, one query.
+func collectObservationAge(store *Store, projectID string) (*ObservationAge, error) {
+	timestamped, err := countQuery(store, `
+		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
+		WHERE `+timestampedObsFilter+`
+		RETURN count(*)
+	`, map[string]any{"project_id": projectID})
+	if err != nil {
+		return nil, err
+	}
+	if timestamped <= 0 {
+		return nil, nil
+	}
+
+	age := &ObservationAge{}
+	result, err := store.QueryParams(`
+		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
+		WHERE `+timestampedObsFilter+`
+		RETURN max(o.created_at), min(o.created_at)
+	`, map[string]any{"project_id": projectID})
+	if err != nil {
+		return nil, err
+	}
+	if !result.HasNext() {
+		result.Close()
+		return nil, nil
+	}
+	row, err := result.Next()
+	if err != nil {
+		result.Close()
+		return nil, err
+	}
+	present, err := ageBoundsFromRow(row, age)
+	result.Close()
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		// The race the median query below also guards against: a writer
+		// deleted the rows between the count and this query. Reported as no
+		// age rather than an error — see that comment for why.
+		return nil, nil
+	}
+
+	// Median by position: the middle row (lower of the two for even counts)
+	// of the timestamped observations in created_at order.
+	// Plain concatenation, not Sprintf: the format string would embed
+	// timestampedObsFilter, so a '%' ever appearing in that shared constant
+	// would silently corrupt this query.
+	result, err = store.QueryParams(`
+		MATCH (e:Entity {project_id: $project_id})-[:HAS_OBSERVATION]->(o:Observation)
+		WHERE `+timestampedObsFilter+`
+		RETURN o.created_at
+		ORDER BY o.created_at
+		SKIP `+strconv.Itoa((timestamped-1)/2)+` LIMIT 1
+	`, map[string]any{"project_id": projectID})
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	if !result.HasNext() {
+		// A writer deleted rows between the count and this query. The age
+		// stats are one line of a report — losing them is not worth failing
+		// the whole run over, so report no age rather than an error.
+		return nil, nil
+	}
+	// `=` not `:=`: row is already declared by the max/min read above.
+	row, err = result.Next()
+	if err != nil {
+		return nil, err
+	}
+	if age.Median, err = timeCell(row, 0); err != nil {
+		return nil, err
+	}
+	return age, nil
+}
+
+// timeCell reads a timestamp cell. An unexpected type is an error, not a zero
+// time — the silent-fallback rule from intFromCount applies doubly to the
+// metric that exists because timestamps were once silently zeroed.
+func timeCell(row interface{ GetValue(uint64) (any, error) }, col uint64) (time.Time, error) {
+	v, err := row.GetValue(col)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return timeValue(v)
+}
+
+// timeValue converts an already-read cell to a UTC time.
+func timeValue(v any) (time.Time, error) {
+	t, ok := v.(time.Time)
+	if !ok {
+		return time.Time{}, fmt.Errorf("timestamp cell has unexpected type %T", v)
+	}
+	return t.UTC(), nil
+}
+
+// ageBoundsFromRow reads the max/min row into age, reporting whether the bounds
+// were actually present.
+//
+// The absent case is NOT an empty result set. `RETURN max(...), min(...)` has
+// no GROUP BY, so it is a full aggregation: over zero matched rows Kuzu returns
+// exactly ONE row with both columns NULL (verified directly against the engine,
+// not assumed). Guarding with !HasNext() therefore never fires, and feeding
+// those NULLs to timeCell trips its type assertion and fails the whole run —
+// while `kg health` is documented to always exit 0, being a report and not a
+// gate. So a NULL here means "the rows went away", handled like the median
+// query's missing row.
+//
+// A non-NULL value of the wrong type stays a hard error: that is a real defect,
+// and timeCell exists precisely because these timestamps were once silently
+// zeroed.
+func ageBoundsFromRow(row interface{ GetValue(uint64) (any, error) }, age *ObservationAge) (bool, error) {
+	newestRaw, err := row.GetValue(0)
+	if err != nil {
+		return false, err
+	}
+	oldestRaw, err := row.GetValue(1)
+	if err != nil {
+		return false, err
+	}
+	if newestRaw == nil || oldestRaw == nil {
+		return false, nil
+	}
+	if age.Newest, err = timeValue(newestRaw); err != nil {
+		return false, err
+	}
+	if age.Oldest, err = timeValue(oldestRaw); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // countQuery runs a single-row count(*) query and returns the count.

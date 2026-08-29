@@ -68,6 +68,7 @@ func NewServerWithAuth(dataDir string, readVerifier, seedVerifier Verifier, kgVe
 		kgVersion:    kgVersion,
 	}
 	s.sweepStaging()
+	s.reconcileInstalls()
 	return s
 }
 
@@ -94,6 +95,96 @@ func (s *Server) sweepStaging() {
 			if strings.HasPrefix(n, ".tmp-") || strings.HasPrefix(n, ".old-") || strings.HasPrefix(n, "current.tmp-") {
 				_ = os.RemoveAll(filepath.Join(gdir, n))
 			}
+		}
+	}
+}
+
+// reconcileInstalls restores the invariant that `current` and the registry
+// name the same commit for every graph.
+//
+// install's rollback covers error returns, but a hard kill between its two
+// renames — repointing `current`, then writing the registry — leaves
+// `current` on a commit the registry never recorded. That split is silent
+// and permanent: a search reads the database from `current` but queries it
+// with the registry's ProjectID, so the graph answers HTTP 200 with zero
+// results whenever the project ID changed, and no later read corrects it.
+//
+// The registry write is install's commit point, so the registry is the
+// authority: an unregistered `current` target means the seed never
+// committed, and the symlink is rolled back to the registered commit. The
+// orphaned commit directory is deliberately left in place — the next
+// successful install's prune removes it, and deleting data is not a job for
+// a constructor-time repair pass.
+//
+// One residual this cannot see: a kill while re-pushing the commit that is
+// ALREADY installed. install stashes the existing directory as .old-*, moves
+// the new database in, and dies before the registry write; sweepStaging then
+// deletes the stash, and `current` still names the registered commit, so
+// nothing here looks wrong. The graph serves the new database under the old
+// GraphInfo. It needs a same-commit re-push (a dirty push) whose ProjectID
+// also changed, and closing it means stamping the installed database's
+// identity somewhere this pass can compare — not worth the machinery until
+// the failure is observed.
+func (s *Server) reconcileInstalls() {
+	reg, err := loadRegistry(s.dataDir)
+	if err != nil {
+		log.Printf("reconcile installs: load registry: %v", err)
+		return
+	}
+	for name, info := range reg.Graphs {
+		// registry.json is hand-editable, so this runs before the pointer is
+		// dereferenced: `{"graphs":{"g":null}}` unmarshals to a nil entry, and
+		// this pass runs in the constructor — a panic here aborts `kg hub
+		// serve` outright rather than being contained to one request.
+		if info == nil {
+			log.Printf("reconcile: registry entry %q is null — skipping (the graph will not be served)", name)
+			continue
+		}
+		// Validate everything joined into a path, as everywhere else.
+		if !validPathComponent(name) || !validPathComponent(info.Commit) {
+			log.Printf("reconcile: registry entry %q records invalid name or commit %q — skipping (the graph will not be served)", name, info.Commit)
+			continue
+		}
+		gdir := s.graphDir(name)
+		currentLink := filepath.Join(gdir, "current")
+
+		// The registered commit's directory is what any repair points at, and
+		// its absence is worth reporting even when there is nothing to repair:
+		// a `current` that already names it still fails every search.
+		registeredExists := true
+		if _, serr := os.Stat(filepath.Join(gdir, info.Commit)); serr != nil {
+			registeredExists = false
+		}
+
+		target, err := os.Readlink(currentLink)
+		switch {
+		case err == nil && target == info.Commit:
+			if !registeredExists {
+				log.Printf("reconcile %s: current names the registered commit %s but its directory is missing — searches will fail and reconcile cannot repair it (restore the directory or re-push)", name, info.Commit)
+			}
+			continue
+		case err != nil && !os.IsNotExist(err):
+			// Something is there but unreadable as a symlink; repairing it
+			// blind could destroy data this pass does not understand.
+			log.Printf("reconcile %s: read current: %v — leaving as is", name, err)
+			continue
+		}
+		// From here: current is missing (a partial copy, a restored backup, an
+		// operator) or points somewhere the registry does not record. Both are
+		// repaired from the registry, which is install's commit point.
+
+		if !registeredExists {
+			log.Printf("reconcile %s: registry records %s but its directory is missing — leaving as is", name, info.Commit)
+			continue
+		}
+		if rerr := replaceSymlink(gdir, currentLink, info.Commit); rerr != nil {
+			log.Printf("reconcile %s: point current at %s: %v", name, info.Commit, rerr)
+			continue
+		}
+		if os.IsNotExist(err) {
+			log.Printf("reconcile %s: current was missing; pointed it at the registered commit %s", name, info.Commit)
+		} else {
+			log.Printf("reconcile %s: current pointed at unregistered commit %s (interrupted seed); rolled back to registered %s", name, target, info.Commit)
 		}
 	}
 }
@@ -254,7 +345,7 @@ func (s *Server) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "load registry", err)
 		return
 	}
-	info, ok := reg.Graphs[name]
+	info, ok := reg.graph(name)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 		return
@@ -325,7 +416,7 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "load registry", err)
 		return
 	}
-	info, ok := reg.Graphs[name]
+	info, ok := reg.graph(name)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 		return
@@ -344,7 +435,12 @@ func (s *Server) handleGraphSearch(w http.ResponseWriter, r *http.Request) {
 		// whose search failed is logged and excluded, so the field never
 		// over-reports coverage.
 		for _, layer := range expandLayers(reg, name) {
-			layerResults, err := s.searchGraph(layer, reg.Graphs[layer], req.Query, req.Limit)
+			layerInfo, ok := reg.graph(layer)
+			if !ok {
+				log.Printf("layer search graph %q (layer of %q): registry entry missing or null — skipping", layer, name)
+				continue
+			}
+			layerResults, err := s.searchGraph(layer, layerInfo, req.Query, req.Limit)
 			if err != nil {
 				log.Printf("layer search graph %q (layer of %q): %v", layer, name, err)
 				continue
@@ -386,7 +482,7 @@ func expandLayers(reg *Registry, graph string) []string {
 	for depth := 0; len(queue) > 0 && depth < maxLayerExpansion; depth++ {
 		var next []string
 		for _, g := range queue {
-			info, ok := reg.Graphs[g]
+			info, ok := reg.graph(g)
 			if !ok {
 				continue
 			}
@@ -399,7 +495,7 @@ func expandLayers(reg *Registry, graph string) []string {
 					log.Printf("expand layers of %q: invalid layer name %q — skipping", graph, layer)
 					continue
 				}
-				if _, ok := reg.Graphs[layer]; !ok {
+				if _, ok := reg.graph(layer); !ok {
 					log.Printf("expand layers of %q: layer graph %q not on this hub — skipping", graph, layer)
 					continue
 				}
@@ -474,7 +570,7 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid graph name %q", name))
 				return
 			}
-			if _, ok := reg.Graphs[name]; !ok {
+			if _, ok := reg.graph(name); !ok {
 				writeError(w, http.StatusNotFound, fmt.Sprintf("unknown graph %q", name))
 				return
 			}
@@ -484,7 +580,14 @@ func (s *Server) handleFederatedSearch(w http.ResponseWriter, r *http.Request) {
 
 	out := make(map[string]any, len(names))
 	for _, name := range names {
-		info := reg.Graphs[name]
+		info, ok := reg.graph(name)
+		if !ok {
+			// Checked above when the name list was validated, so this only
+			// fires if the entry is null rather than absent — which would
+			// otherwise panic on info.Commit below.
+			out[name] = map[string]any{"error": "unknown graph"}
+			continue
+		}
 		results, err := s.searchGraph(name, info, req.Query, req.Limit)
 		if err != nil {
 			log.Printf("federated search graph %q: %v", name, err)
@@ -636,7 +739,7 @@ func (s *Server) checkGraphOwnership(name, repo, force string) error {
 		// let the seed proceed and fail later if it is going to.
 		return nil
 	}
-	existing, ok := reg.Graphs[name]
+	existing, ok := reg.graph(name)
 	if !ok || existing.Repo == "" || repo == "" || existing.Repo == repo {
 		return nil
 	}

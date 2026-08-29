@@ -30,6 +30,22 @@ type Registry struct {
 	Graphs map[string]*GraphInfo `json:"graphs"`
 }
 
+// graph returns the entry for name, treating a nil entry as absent.
+//
+// registry.json is hand-editable, and `{"graphs":{"g":null}}` unmarshals to a
+// present key with a nil value — so a bare `info, ok := reg.Graphs[name]`
+// reports ok == true and the next dereference panics. reconcileInstalls already
+// guards its own loop for exactly this reason; every other lookup goes through
+// here so the same state fails as "unknown graph" instead of taking down a
+// request handler.
+func (r *Registry) graph(name string) (*GraphInfo, bool) {
+	info, ok := r.Graphs[name]
+	if !ok || info == nil {
+		return nil, false
+	}
+	return info, true
+}
+
 const registryFile = "registry.json"
 
 // loadRegistry reads registry.json from dataDir. A missing file yields an

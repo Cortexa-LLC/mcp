@@ -2,6 +2,7 @@ package kglib
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -84,8 +85,14 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 
 	entities := make(map[string]*Entity)
 	nodes := make([]hnsw.Node[string], 0, 256)
+	dropped := 0
+	// Counted per row, not derived at the end: rows whose embedding column is
+	// missing or empty are skipped before `dropped` is touched, so
+	// dropped+len(nodes) would omit them and understate what was actually read.
+	read := 0
 
 	for result.HasNext() {
+		read++
 		tuple, err := result.Next()
 		if err != nil {
 			return nil, fmt.Errorf("index build next: %w", err)
@@ -110,15 +117,27 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		if !ok || len(rawEmb) == 0 {
 			continue
 		}
-		emb := make([]float32, len(rawEmb))
-		for i, v := range rawEmb {
-			if f, ok := v.(float32); ok {
-				emb[i] = f
-			}
+		emb, ok := embeddingFromRaw(rawEmb)
+		if !ok {
+			// A component of unhandled type must exclude the whole node: the
+			// old behaviour left it at 0, silently distorting every distance
+			// this vector participated in. Excluding it is correct but just as
+			// invisible from the outside — the entity simply stops appearing
+			// in vector results — so the count is reported below.
+			dropped++
+			continue
 		}
 
 		entities[entity.ID] = entity
 		nodes = append(nodes, hnsw.MakeNode(entity.ID, emb))
+	}
+
+	if dropped > 0 {
+		// Not an error — the index is still usable — but silently reduced
+		// recall is exactly the kind of thing nobody discovers from search
+		// results, so say it once per build.
+		log.Printf("index build (project %s): dropped %d of %d vectors read, whose components had unhandled types",
+			projectID, dropped, read)
 	}
 
 	if len(nodes) > 0 {
@@ -130,4 +149,25 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		entities: entities,
 		builtAt:  time.Now().UTC(),
 	}, nil
+}
+
+// embeddingFromRaw converts a Kuzu list cell to an embedding vector. go-kuzu
+// returns float32 for FLOAT columns today, but a DOUBLE column — or a driver
+// change — arrives as float64; both are accepted. Any other component type
+// returns ok=false so the caller can drop the vector: zeroing the component,
+// which is what a bare type assertion used to do, silently corrupts every
+// distance the vector participates in and is invisible in search results.
+func embeddingFromRaw(raw []any) ([]float32, bool) {
+	emb := make([]float32, len(raw))
+	for i, v := range raw {
+		switch f := v.(type) {
+		case float32:
+			emb[i] = f
+		case float64:
+			emb[i] = float32(f)
+		default:
+			return nil, false
+		}
+	}
+	return emb, true
 }
