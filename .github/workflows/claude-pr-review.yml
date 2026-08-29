@@ -586,8 +586,18 @@ jobs:
           # posted as data via --body-file. The verdict line is matched
           # strictly; anything malformed degrades to a plain comment so a
           # confused (or manipulated) run can never accidentally approve.
+          # Drop leading blank lines before reading the verdict. The model can
+          # open its answer with one, and `jq -r .result` carries it through —
+          # which makes FIRST_LINE empty, matches no case, and silently
+          # degrades the run to --comment while `tail -n +2` leaves the
+          # "VERDICT: approve" line sitting at the top of the posted body.
+          # Observed on PR #5 f8d8dbd: the reviewer approved with zero findings
+          # at every severity and the review was recorded as COMMENTED, which
+          # also means Route A of the shepherd skill can never fire.
+          sed -i '/./,$!d' "$REVIEW_RAW"
           VERDICT_FLAG="--comment"
-          FIRST_LINE="$(head -n 1 "$REVIEW_RAW")"
+          # Trailing CR or spaces would also defeat the exact-match cases below.
+          FIRST_LINE="$(head -n 1 "$REVIEW_RAW" | tr -d '\r' | sed 's/[[:space:]]*$//')"
           case "$FIRST_LINE" in
             "VERDICT: approve")          VERDICT_FLAG="--approve" ;;
             "VERDICT: request-changes")  VERDICT_FLAG="--request-changes" ;;
