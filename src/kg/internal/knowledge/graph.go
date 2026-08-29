@@ -43,6 +43,12 @@ type GraphEdge struct {
 	FromID string `json:"from_id"`
 	ToID   string `json:"to_id"`
 	Type   string `json:"type"`
+
+	// Derived marks an edge this tool worked out rather than read from a
+	// database — today, cross-layer package links. A reader has to be able to
+	// tell the two apart, so renderers draw derived edges dashed and the
+	// header counts them separately.
+	Derived bool `json:"derived,omitempty"`
 }
 
 // Graph is a whole project's entities and relations held in memory.

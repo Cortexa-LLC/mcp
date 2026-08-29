@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Federated graph loading — one Graph built from a scope and every layer it
@@ -32,6 +33,22 @@ import (
 // of places, while template text appears in everything.
 const DefaultMaxJoinLayers = 3
 
+// DefaultJoinTypes are the entity types whose names identify the same thing
+// across databases.
+//
+// The distinction is not how widespread a name is but whether names of that
+// kind are chosen to be globally meaningful. A package name is: that is what a
+// package name is for. A function name is not — measured on a real estate, the
+// identifiers producing the most cross-layer joins were Foundation,
+// CodingKeys, print, map and forEach, none of which means the same thing in
+// two repositories. Files are path-derived, and topics are documentation
+// headings.
+//
+// Types are excluded by default and available through --join-types: some
+// genuinely identify (AddressClient), many do not (CodingKeys), and there is
+// no way to tell from the name alone.
+var DefaultJoinTypes = []string{EntityTypePackage, EntityTypeImport}
+
 // FederatedGraphOptions describes which databases to assemble into one graph.
 type FederatedGraphOptions struct {
 	// AIDir is the .ai directory holding the scope databases.
@@ -45,6 +62,13 @@ type FederatedGraphOptions struct {
 	OnlyLayers []string
 	// MaxJoinLayers is the boilerplate guard; zero means DefaultMaxJoinLayers.
 	MaxJoinLayers int
+	// JoinTypes are the entity types eligible for cross-layer identity
+	// joining. Nil means DefaultJoinTypes; an explicitly empty slice joins
+	// nothing, leaving the layers as the disconnected components they are.
+	JoinTypes []string
+	// NoDerived suppresses cross-layer package linking, leaving only relations
+	// an indexer actually recorded.
+	NoDerived bool
 }
 
 // LayerLoad is one layer's contribution to a federated graph.
@@ -78,6 +102,10 @@ type FederationReport struct {
 	// IDCollisions counts nodes whose ID already existed in another layer and
 	// were renamed to keep them distinct.
 	IDCollisions int `json:"id_collisions,omitempty"`
+	// JoinTypes are the entity types that were eligible to join.
+	JoinTypes []string `json:"join_types"`
+	// Link records what cross-layer package linking derived.
+	Link LinkReport `json:"link"`
 }
 
 // FailedLayers returns the layers that could not be read. A federated render
@@ -132,8 +160,26 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 		}
 	}
 
+	joinTypes := opts.JoinTypes
+	if joinTypes == nil {
+		joinTypes = DefaultJoinTypes
+	}
+	eligible := lowerSet(joinTypes)
+	// Lower-cased for the report: matching is already case-insensitive via
+	// lowerSet, but storing the raw input meant `--join-types Package,IMPORT`
+	// printed back "Package, IMPORT" instead of a normalised form.
+	report.JoinTypes = make([]string, 0, len(joinTypes))
+	for _, t := range joinTypes {
+		report.JoinTypes = append(report.JoinTypes, strings.ToLower(t))
+	}
+
 	joinable := make(map[ntKey]bool)
 	for key, count := range layerCount {
+		if !eligible[strings.ToLower(key.Type)] {
+			// This type's names are local to a repository; two matches are a
+			// coincidence, not an identity.
+			continue
+		}
 		switch {
 		case count <= 1:
 			// Nothing to join.
@@ -271,6 +317,10 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 			Name:   "remote:" + name,
 			Failed: "remote hub layers federate into search only; kg graph reads local layers",
 		})
+	}
+
+	if !opts.NoDerived {
+		report.Link = LinkPackages(merged)
 	}
 
 	// Joined nodes accumulate layers in load order; sorting makes the rendered
