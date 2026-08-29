@@ -238,3 +238,25 @@ func TestDerivedEdgesRenderDistinctly(t *testing.T) {
 		t.Errorf("derived edge is not dashed in dot:\n%s", dot)
 	}
 }
+
+// A Java wildcard import resolves to the package name itself. extractImportPath
+// keeps only the scoped_identifier and drops the trailing asterisk, so
+// `import com.depop.auth.client.*;` arrives as "com.depop.auth.client" —
+// identical to the package it names.
+//
+// The documented rule is "the longest package name that is a dotted prefix of
+// it", and a string is a prefix of itself, so this must resolve. Kotlin happens
+// to escape the bug only because its extractor keeps the ".*" suffix verbatim,
+// leaving a longer string that the proper-prefix loop does reach.
+func TestLinkPackagesResolvesAnImportEqualToThePackageName(t *testing.T) {
+	g := linkGraph(
+		pkgNode("pkg1", "com.depop.auth.client", "libraries"),
+		importNode("imp1", "com.depop.auth.client", "martech"),
+	)
+
+	report := LinkPackages(g)
+
+	if report.Derived != 1 {
+		t.Errorf("Derived = %d, want 1 — an import equal to the package name did not resolve", report.Derived)
+	}
+}

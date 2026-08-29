@@ -156,9 +156,17 @@ func packageIndex(g *Graph) map[string]*packageTarget {
 // resolvePackage finds the longest package name that prefixes importName,
 // returning the name and its target. Longest-first means
 // com.depop.auth.client beats com.depop.auth, which is the specific answer.
+//
+// The loop starts at len(parts), not len(parts)-1: a string is a prefix of
+// itself, and an import equal to a package name is the ordinary shape of a
+// Java wildcard import. extractImportPath keeps only the scoped_identifier and
+// drops the trailing asterisk, so `import com.depop.auth.client.*;` arrives as
+// "com.depop.auth.client" — exactly the package name. Testing only proper
+// prefixes dropped every one of those silently. (Kotlin escaped it by accident:
+// its extractor keeps the ".*" verbatim, leaving a longer string.)
 func resolvePackage(importName string, targets map[string]*packageTarget) (string, *packageTarget) {
 	parts := strings.Split(importName, packageSeparator)
-	for cut := len(parts) - 1; cut >= minPackageSegments; cut-- {
+	for cut := len(parts); cut >= minPackageSegments; cut-- {
 		candidate := strings.Join(parts[:cut], packageSeparator)
 		if target, ok := targets[candidate]; ok {
 			return candidate, target

@@ -165,7 +165,13 @@ func LoadFederatedGraph(opts FederatedGraphOptions) (*Graph, *FederationReport, 
 		joinTypes = DefaultJoinTypes
 	}
 	eligible := lowerSet(joinTypes)
-	report.JoinTypes = append([]string{}, joinTypes...)
+	// Lower-cased for the report: matching is already case-insensitive via
+	// lowerSet, but storing the raw input meant `--join-types Package,IMPORT`
+	// printed back "Package, IMPORT" instead of a normalised form.
+	report.JoinTypes = make([]string, 0, len(joinTypes))
+	for _, t := range joinTypes {
+		report.JoinTypes = append(report.JoinTypes, strings.ToLower(t))
+	}
 
 	joinable := make(map[ntKey]bool)
 	for key, count := range layerCount {
