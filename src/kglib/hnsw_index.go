@@ -86,8 +86,13 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 	entities := make(map[string]*Entity)
 	nodes := make([]hnsw.Node[string], 0, 256)
 	dropped := 0
+	// Counted per row, not derived at the end: rows whose embedding column is
+	// missing or empty are skipped before `dropped` is touched, so
+	// dropped+len(nodes) would omit them and understate what was actually read.
+	read := 0
 
 	for result.HasNext() {
+		read++
 		tuple, err := result.Next()
 		if err != nil {
 			return nil, fmt.Errorf("index build next: %w", err)
@@ -132,7 +137,7 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		// recall is exactly the kind of thing nobody discovers from search
 		// results, so say it once per build.
 		log.Printf("index build (project %s): dropped %d of %d vectors read, whose components had unhandled types",
-			projectID, dropped, dropped+len(nodes))
+			projectID, dropped, read)
 	}
 
 	if len(nodes) > 0 {

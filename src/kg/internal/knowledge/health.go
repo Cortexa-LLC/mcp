@@ -179,20 +179,29 @@ func collectObservationAge(store *Store, projectID string) (*ObservationAge, err
 	if err != nil {
 		return nil, err
 	}
-	if result.HasNext() {
-		row, err := result.Next()
-		if err != nil {
-			result.Close()
-			return nil, err
-		}
-		if age.Newest, err = timeCell(row, 0); err != nil {
-			result.Close()
-			return nil, err
-		}
-		if age.Oldest, err = timeCell(row, 1); err != nil {
-			result.Close()
-			return nil, err
-		}
+	if !result.HasNext() {
+		// Same race the median query below guards against, and the same
+		// answer: a writer deleted the rows between the count and this query.
+		//
+		// Falling through instead would leave Newest and Oldest at the zero
+		// time, which printHealth renders via humanAge(gen.Sub(oa.Newest)) as
+		// an age of roughly two thousand years — the precise "every graph
+		// reads as centuries old" symptom this metric was added to expose.
+		result.Close()
+		return nil, nil
+	}
+	row, err := result.Next()
+	if err != nil {
+		result.Close()
+		return nil, err
+	}
+	if age.Newest, err = timeCell(row, 0); err != nil {
+		result.Close()
+		return nil, err
+	}
+	if age.Oldest, err = timeCell(row, 1); err != nil {
+		result.Close()
+		return nil, err
 	}
 	result.Close()
 
@@ -218,7 +227,8 @@ func collectObservationAge(store *Store, projectID string) (*ObservationAge, err
 		// the whole run over, so report no age rather than an error.
 		return nil, nil
 	}
-	row, err := result.Next()
+	// `=` not `:=`: row is already declared by the max/min read above.
+	row, err = result.Next()
 	if err != nil {
 		return nil, err
 	}
