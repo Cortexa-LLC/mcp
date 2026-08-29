@@ -57,8 +57,16 @@ func seedLayer(t *testing.T, aiDir, name string, layers []string, entities ...fe
 	}
 }
 
-// loadFed is the common call under test.
+// loadFed is the common call under test, with the default join policy.
 func loadFed(t *testing.T, aiDir, scopeName string, maxJoin int, only ...string) (*Graph, *FederationReport) {
+	t.Helper()
+	return loadFedJoining(t, aiDir, scopeName, maxJoin, nil, only...)
+}
+
+// loadFedJoining is loadFed with an explicit join policy. Most fixtures here
+// predate the per-type policy and were written around `type` entities, so they
+// say so rather than relying on a default that deliberately excludes them.
+func loadFedJoining(t *testing.T, aiDir, scopeName string, maxJoin int, joinTypes []string, only ...string) (*Graph, *FederationReport) {
 	t.Helper()
 
 	scope, err := LoadScopeConfig(aiDir, scopeName)
@@ -71,6 +79,7 @@ func loadFed(t *testing.T, aiDir, scopeName string, maxJoin int, only ...string)
 		ProjectID:     fedProject,
 		OnlyLayers:    only,
 		MaxJoinLayers: maxJoin,
+		JoinTypes:     joinTypes,
 	})
 	if err != nil {
 		t.Fatalf("LoadFederatedGraph: %v", err)
@@ -110,7 +119,7 @@ func TestLoadFederatedGraphJoinsSharedIdentities(t *testing.T) {
 		fedEntity{"estate.md", EntityTypeFile},
 	)
 
-	g, report := loadFed(t, aiDir, "estate", 0)
+	g, report := loadFedJoining(t, aiDir, "estate", 0, []string{EntityTypeType})
 
 	// Address exists in two layers and must arrive as one node carrying both.
 	address := nodeByName(t, g, "Address")
@@ -162,7 +171,8 @@ func TestLoadFederatedGraphSuppressesWidespreadNames(t *testing.T) {
 		fedEntity{"estate.md", EntityTypeFile},
 	)
 
-	g, report := loadFed(t, aiDir, "estate", 2) // "Deployment" is in 3 layers
+	joinTopics := []string{EntityTypeTopic}
+	g, report := loadFedJoining(t, aiDir, "estate", 2, joinTopics) // "Deployment" is in 3 layers
 
 	var deployments int
 	for _, n := range g.nodes {
@@ -184,7 +194,7 @@ func TestLoadFederatedGraphSuppressesWidespreadNames(t *testing.T) {
 	}
 
 	// Raising the guard joins it, which is the escape hatch the report offers.
-	g2, report2 := loadFed(t, aiDir, "estate", 3)
+	g2, report2 := loadFedJoining(t, aiDir, "estate", 3, joinTopics)
 	if report2.Joined != 1 {
 		t.Errorf("with a raised guard, Joined = %d, want 1", report2.Joined)
 	}
@@ -283,7 +293,7 @@ func TestLoadFederatedGraphRenamesCollidingIDs(t *testing.T) {
 
 	// maxJoin 1 leaves the identity unjoined, so nothing but the ID could fuse
 	// these two.
-	g, report := loadFed(t, aiDir, "estate", 1)
+	g, report := loadFedJoining(t, aiDir, "estate", 1, []string{})
 
 	var dots []GraphNode
 	for _, n := range g.nodes {
@@ -307,6 +317,58 @@ func TestLoadFederatedGraphRenamesCollidingIDs(t *testing.T) {
 	}
 	if claimed != g.NodeCount() {
 		t.Errorf("layers claim %d nodes but the graph holds %d", claimed, g.NodeCount())
+	}
+}
+
+// The join policy is the correction this package exists to make: a name
+// identifies a package across repositories and does not identify a function.
+func TestLoadFederatedGraphJoinPolicyByType(t *testing.T) {
+	aiDir := t.TempDir()
+	for _, layer := range []string{"a", "b"} {
+		seedLayer(t, aiDir, layer, nil,
+			fedEntity{layer + ".go", EntityTypeFile},
+			fedEntity{"print", EntityTypeFunction},         // never joins
+			fedEntity{"com.depop.auth", EntityTypePackage}, // joins by default
+			fedEntity{"CodingKeys", EntityTypeType},        // joins only on request
+		)
+	}
+	seedLayer(t, aiDir, "estate", []string{"a", "b"}, fedEntity{"estate.md", EntityTypeFile})
+
+	countNamed := func(g *Graph, name string) int {
+		n := 0
+		for _, node := range g.nodes {
+			if node.Name == name {
+				n++
+			}
+		}
+		return n
+	}
+
+	g, _ := loadFed(t, aiDir, "estate", 0)
+	if got := countNamed(g, "print"); got != 2 {
+		t.Errorf("function \"print\" collapsed to %d node(s); it must never join", got)
+	}
+	if got := countNamed(g, "com.depop.auth"); got != 1 {
+		t.Errorf("package joined into %d node(s), want 1", got)
+	}
+	if got := countNamed(g, "CodingKeys"); got != 2 {
+		t.Errorf("type joined into %d node(s) under the default policy, want 2", got)
+	}
+
+	// Opting a type in is what --join-types is for.
+	g2, _ := loadFedJoining(t, aiDir, "estate", 0, []string{EntityTypePackage, EntityTypeType})
+	if got := countNamed(g2, "CodingKeys"); got != 1 {
+		t.Errorf("with type joining requested, got %d node(s), want 1", got)
+	}
+	if got := countNamed(g2, "print"); got != 2 {
+		t.Errorf("function joined when it was not in the policy: %d node(s)", got)
+	}
+
+	// An explicitly empty policy joins nothing — the layers stay the
+	// disconnected components they actually are.
+	g3, _ := loadFedJoining(t, aiDir, "estate", 0, []string{})
+	if got := countNamed(g3, "com.depop.auth"); got != 2 {
+		t.Errorf("empty join policy still joined packages: %d node(s), want 2", got)
 	}
 }
 
@@ -414,25 +476,42 @@ func TestLoadFederatedGraphReportsRemotesAsSkipped(t *testing.T) {
 // another layer, which is what makes the key joinable in the first place.
 func TestLoadFederatedGraphKeepsSameLayerNamesakesApart(t *testing.T) {
 	aiDir := t.TempDir()
-	// Two unrelated Config types in one layer, plus a Config in another so the
-	// (name, type) key counts as joinable.
+	// Two unrelated packages named "config" in one layer — internal/api/config
+	// and internal/worker/config, which is an ordinary Go layout — plus a
+	// "config" package in another layer so the (name, type) key is joinable.
+	// The type must be one DefaultJoinTypes actually joins: only package and
+	// import cross layers, so a type or file namesake never reaches this path.
 	seedLayer(t, aiDir, "payments", []string{"libs"},
 		fedEntity{name: "Root", entityType: EntityTypeFile},
-		fedEntity{name: "Config", entityType: EntityTypeType},
-		fedEntity{name: "Config", entityType: EntityTypeType})
+		fedEntity{name: "config", entityType: EntityTypePackage},
+		fedEntity{name: "config", entityType: EntityTypePackage})
 	seedLayer(t, aiDir, "libs", nil,
-		fedEntity{name: "Config", entityType: EntityTypeType})
+		fedEntity{name: "config", entityType: EntityTypePackage})
 
-	g, _ := loadFed(t, aiDir, "payments", 0)
+	g, report := loadFed(t, aiDir, "payments", 0)
+
+	// Guard the premise: if the join policy stops covering package, this test
+	// would pass for the wrong reason — nothing joins, so nothing can fuse.
+	joined := false
+	for _, jt := range report.JoinTypes {
+		if strings.EqualFold(jt, EntityTypePackage) {
+			joined = true
+		}
+	}
+	if !joined {
+		t.Fatalf("JoinTypes = %v, which does not include %s — this fixture no longer exercises joining",
+			report.JoinTypes, EntityTypePackage)
+	}
 
 	configs := 0
 	for _, n := range g.nodes {
-		if n.Name == "Config" {
+		if n.Name == "config" {
 			configs++
 		}
 	}
-	// payments' two stay separate; libs' joins onto one of them.
+	// payments' two stay separate; libs' joins onto one of them. 1 means the
+	// same-layer pair fused; 3 means nothing joined at all.
 	if configs != 2 {
-		t.Errorf("Config nodes = %d, want 2 — the two same-layer Configs were fused into one", configs)
+		t.Errorf("config nodes = %d, want 2 — 1 means the two same-layer packages fused, 3 means no join happened", configs)
 	}
 }

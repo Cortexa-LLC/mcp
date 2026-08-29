@@ -233,6 +233,8 @@ Error: "main" matches 2 entities — use an ID instead:
 | `--federated` | off | Render the scope together with every *local* layer it federates with |
 | `--layer` | *(all)* | With `--federated`, load only these scopes |
 | `--join-max-layers` | `3` | With `--federated`, the boilerplate guard (see below) |
+| `--join-types` | `package,import` | With `--federated`, entity types whose names identify across layers; `none` joins nothing |
+| `--no-derived` | off | With `--federated`, omit derived cross-layer package links |
 
 `--rel` constrains what the walk follows, not just what is drawn, so filtering to
 `CONTAINS` gives the containment tree rather than the same neighbourhood with
@@ -279,9 +281,19 @@ a plain union of the layers would be a set of disconnected components. What
 connects them is joining identities across layers.
 
 **The join rule.** Two rows in two databases are the same node when their
-`(name, type)` match. That surfaces genuinely shared symbols, and equally
-surfaces the same name implemented separately in several services — often the
-more interesting answer:
+`(name, type)` match **and the type is one whose names identify across
+repositories** — by default `package` and `import`.
+
+That restriction is the whole game. A package name is chosen to be globally
+unique; that is what a package name is for. A function name is not: measured on
+the estate, joining every type produced 67,263 cross-layer relations, and *all*
+of them came from names like `Foundation`, `CodingKeys`, `print`, `map` and
+`forEach` meaning different things in different repositories. `--join-types`
+widens or narrows the policy; `--join-types none` joins nothing and shows the
+layers as the disconnected components they actually are.
+
+Within an eligible type, joining still surfaces the same name implemented
+separately in several services — often the more interesting answer:
 
 ```
 $ kg graph --federated --layer clients,libraries,mobileapi,payments \
@@ -320,6 +332,59 @@ render missing one database is still useful, a silent hole is not), and nodes
 renamed because two layers minted the same ID for different things. Indexer IDs
 are repo-relative paths, so `import:..` legitimately means something different
 in every layer.
+
+#### Derived cross-layer links
+
+Joining says two rows are the same thing. It cannot say that one layer *depends
+on* another — and nothing else can either, because relations live inside a
+single database and no indexer writes one across repositories. Left at that, a
+federated graph is a set of disconnected components.
+
+The dependency is recoverable, because the indexers already record both ends: a
+layer holds an `import` entity named `com.depop.auth.client.AuthClient`, and
+another layer holds a `package` entity named `com.depop.auth.client`. `kg graph
+--federated` resolves the first to the second and adds a `DEPENDS_ON` edge,
+**marked derived and drawn dashed** so it is never mistaken for a relation an
+indexer recorded:
+
+```bash
+kg graph --federated --root package:com.depop.auth.client --depth 1
+```
+
+```
+%% kg graph: 12 node(s), 11 relation(s) of 717633 entities in the project
+%% 11 of those are derived cross-layer links, drawn dashed
+    subgraph layer0["libraries"]
+        n0[["com.depop.auth.client"]]:::kgroot
+    end
+    subgraph layer1["ads"]
+        n1[/"com.depop.auth.client.AccessToken"/]
+    end
+    ...
+    n1 -.->|DEPENDS_ON| n0
+```
+
+Eleven layers depending on one shared auth library — the question `--federated`
+exists to answer.
+
+Resolution rules:
+
+- **Longest prefix wins**, with a **three-segment minimum**. Without the floor,
+  `com.depop` claims every JVM import in the estate and the graph gains one hub
+  node instead of a dependency map.
+- **Ambiguity is skipped, never guessed.** If the matched package is defined in
+  more than one layer, no edge is drawn and the count is reported. On the estate
+  this discards 3,359 imports against 2,525 kept — the majority case, not an
+  edge case.
+- **Same-layer resolutions are dropped**; that structure is already in the
+  layer's own graph.
+- `--no-derived` turns the whole thing off, leaving only recorded relations.
+
+**Only dotted namespaces resolve.** Not one `package` entity in the measured
+estate has a `/` in its name — the indexers do not mint package entities for npm
+or Go module paths — so JVM, Scala and Kotlin layers get derived links and
+JavaScript and Go layers get none. That is a gap in what is indexed rather than
+in the matching, and closing it is an indexer change.
 
 **Cost.** Databases are read one at a time and released, so peak memory is the
 merged graph plus the largest single layer rather than all of them at once.
