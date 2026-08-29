@@ -9,7 +9,7 @@ only what you need. Released under the [MIT No Attribution License](LICENSE.md).
 | Server | Description | CGO |
 |--------|-------------|-----|
 | [markitdown](src/markitdown/) | Convert documents to Markdown (HTML, PDF, DOCX, XLSX, PPTX, images) | No |
-| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions. Supports multi-scope graphs for monorepos, federated across layers, plus a personal store. Graphs can also be pushed to a shared hub (`kg hub serve`) and searched from other projects as remote layers. | Yes |
+| [kg](src/kg/) | Project knowledge graph — store and query code entities across sessions. Supports multi-scope graphs for monorepos, federated across layers, plus a personal store. Renders as mermaid or Graphviz diagrams with `kg graph`. Graphs can also be pushed to a shared hub (`kg hub serve`) and searched from other projects as remote layers. | Yes |
 
 Plus one shared library, not installed as a binary:
 
