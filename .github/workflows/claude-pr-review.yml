@@ -586,27 +586,66 @@ jobs:
           # posted as data via --body-file. The verdict line is matched
           # strictly; anything malformed degrades to a plain comment so a
           # confused (or manipulated) run can never accidentally approve.
-          # Drop leading blank lines before reading the verdict. The model can
-          # open its answer with one, and `jq -r .result` carries it through —
-          # which makes FIRST_LINE empty, matches no case, and silently
-          # degrades the run to --comment while `tail -n +2` leaves the
-          # "VERDICT: approve" line sitting at the top of the posted body.
-          # Observed on PR #5 f8d8dbd: the reviewer approved with zero findings
-          # at every severity and the review was recorded as COMMENTED, which
-          # also means Route A of the shepherd skill can never fire.
-          sed -i '/./,$!d' "$REVIEW_RAW"
+          # The verdict is REQUESTED on line 1, but the model does not reliably
+          # comply. Two observed failures of a line-1-only parse, both of which
+          # silently downgraded a clean approve to a plain comment:
+          #   - mcp PR #5 f8d8dbd: `jq -r .result` carried a leading blank line
+          #     through, so line 1 was empty.
+          #   - ai-pack PR #34: a preamble paragraph preceded the verdict.
+          # Both are silent where it matters — an approve that never registers
+          # leaves reviewDecision empty, so the bot approval the merge gate
+          # depends on simply never happens, and shepherd-pr's Route A can
+          # never fire.
+          #
+          # This parser is ported from ai-pack, which hit the preamble case
+          # first and reasoned the rule through: locate the line that is
+          # exactly a verdict (surrounding whitespace tolerated) anywhere in
+          # the output, and treat everything after it as the body.
+          #
+          # Scanning beyond line 1 would, on its own, WIDEN the injection
+          # surface: under a line-1 parse a forged verdict had to occupy line
+          # 1, whereas a positional scan lets a verdict-shaped line quoted from
+          # the diff win by appearing before the model's real one. The
+          # ambiguity rule removes that — a forged line necessarily produces a
+          # SECOND match, and multiple matches can never resolve to --approve:
+          #   0 matches  -> --comment, whole output posted
+          #   1 match    -> that verdict, body is everything after it
+          #   2+ matches -> --request-changes if ANY match requests changes
+          #                 (never lose a block), else --comment (never gain an
+          #                 approve). Whole output posted so a human can see
+          #                 what made it ambiguous.
+          # A legitimate review that quotes a verdict line is downgraded to a
+          # comment. That is the intended direction of failure.
+          VERDICT_RE='^[[:space:]]*VERDICT:[[:space:]]*(approve|comment|request-changes)[[:space:]]*$'
           VERDICT_FLAG="--comment"
-          # Trailing CR or spaces would also defeat the exact-match cases below.
-          FIRST_LINE="$(head -n 1 "$REVIEW_RAW" | tr -d '\r' | sed 's/[[:space:]]*$//')"
-          case "$FIRST_LINE" in
-            "VERDICT: approve")          VERDICT_FLAG="--approve" ;;
-            "VERDICT: request-changes")  VERDICT_FLAG="--request-changes" ;;
-            "VERDICT: comment")          VERDICT_FLAG="--comment" ;;
-            *) echo "::warning title=Unrecognized verdict line::'${FIRST_LINE}' — posting as plain comment." ;;
-          esac
+          BODY_START=1
+          # grep -c prints 0 and exits 1 on no match; keep the count, drop the status.
+          MATCH_COUNT="$(grep -c -E "$VERDICT_RE" "$REVIEW_RAW" || true)"
+          MATCH_COUNT="${MATCH_COUNT:-0}"
+          VERDICT_LINE_NO="$(grep -n -m1 -E "$VERDICT_RE" "$REVIEW_RAW" | cut -d: -f1 || true)"
+          if [ -z "$VERDICT_LINE_NO" ]; then
+            echo "::warning title=No verdict line::output contains no 'VERDICT: <approve|comment|request-changes>' line — posting the whole output as a plain comment."
+          elif [ "$MATCH_COUNT" -gt 1 ]; then
+            if grep -q -E '^[[:space:]]*VERDICT:[[:space:]]*request-changes[[:space:]]*$' "$REVIEW_RAW"; then
+              VERDICT_FLAG="--request-changes"
+            fi
+            echo "::warning title=Ambiguous verdict::${MATCH_COUNT} verdict-shaped lines in the output (quoted diff content, or a confused run). Refusing to approve on ambiguity — posting as ${VERDICT_FLAG#--} with the full output as the body."
+          else
+            # Whitespace-stripped so the match is exact regardless of spacing;
+            # grep already constrained the value to the three legal verdicts.
+            case "$(sed -n "${VERDICT_LINE_NO}p" "$REVIEW_RAW" | tr -d '[:space:]')" in
+              "VERDICT:approve")         VERDICT_FLAG="--approve" ;;
+              "VERDICT:request-changes") VERDICT_FLAG="--request-changes" ;;
+              "VERDICT:comment")         VERDICT_FLAG="--comment" ;;
+            esac
+            BODY_START=$((VERDICT_LINE_NO + 1))
+            if [ "$VERDICT_LINE_NO" -ne 1 ]; then
+              echo "::warning title=Verdict not on first line::model emitted preamble; verdict found on line ${VERDICT_LINE_NO} and parsed. The preamble is dropped from the posted body."
+            fi
+          fi
 
           REVIEW_BODY="$(mktemp)"
-          tail -n +2 "$REVIEW_RAW" | sed '/./,$!d' > "$REVIEW_BODY"
+          tail -n +"$BODY_START" "$REVIEW_RAW" | sed '/./,$!d' > "$REVIEW_BODY"
           if [ ! -s "$REVIEW_BODY" ]; then
             echo "::warning title=Empty review body::model produced no review text; posting raw output as comment."
             cp "$REVIEW_RAW" "$REVIEW_BODY"
