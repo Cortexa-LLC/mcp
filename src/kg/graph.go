@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -85,7 +86,7 @@ Examples:
   kg graph --type file,package --limit 60        # whole graph, structure only
   kg graph --format dot | dot -Tsvg -o graph.svg # render an image
   kg graph --personal --format json              # personal store, machine-readable`,
-	RunE: func(cmd *cobra.Command, args []string) (retErr error) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Silently ignoring these would render one database and look like it
 		// had honoured the request.
 		if !graphFederated {
@@ -96,21 +97,18 @@ Examples:
 			}
 		}
 
+		// Render into memory when writing to a file, and only touch the target
+		// once everything has succeeded. Opening it here instead would truncate
+		// it immediately — os.Create is O_TRUNC — and the render can still fail
+		// afterwards on flag validation, an unresolvable --root, or the store
+		// open. The docs recommend committing these diagrams and refreshing them
+		// with the same command, so a mistyped flag must not be able to empty
+		// one; the file is either replaced by a complete render or left alone.
 		out := cmd.OutOrStdout()
+		var rendered *bytes.Buffer
 		if graphOutput != "" {
-			f, err := os.Create(graphOutput)
-			if err != nil {
-				return fmt.Errorf("create %s: %w", graphOutput, err)
-			}
-			// Not a bare `defer f.Close()`: buffered writes can fail on close
-			// (a full disk, an NFS error surfacing late), and discarding that
-			// would report "Wrote N node(s)" and exit 0 over a truncated file.
-			defer func() {
-				if cerr := f.Close(); cerr != nil && retErr == nil {
-					retErr = fmt.Errorf("close %s: %w", graphOutput, cerr)
-				}
-			}()
-			out = f
+			rendered = &bytes.Buffer{}
+			out = rendered
 		}
 
 		settings := graphSettings{
@@ -141,6 +139,12 @@ Examples:
 			return err
 		}
 
+		if rendered != nil {
+			if err := writeFileAtomic(graphOutput, rendered.Bytes()); err != nil {
+				return err
+			}
+		}
+
 		// Notes go to stderr so that a piped render stays a clean document.
 		if graphOutput != "" {
 			cmd.PrintErrf("Wrote %d node(s) and %d relation(s) to %s\n",
@@ -154,6 +158,44 @@ Examples:
 		}
 		return nil
 	},
+}
+
+// writeFileAtomic replaces path with data by writing a temporary file in the
+// same directory and renaming it into place.
+//
+// The rename is what makes it safe: a plain write truncates the target first,
+// so a failure part-way through (a full disk, a killed process) would leave a
+// half-written diagram where a complete one used to be. Renaming within one
+// directory is atomic, so the target is only ever the old contents or the new.
+func writeFileAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("create temp file beside %s: %w", path, err)
+	}
+	tmp := f.Name()
+	// Cleans up on every failure path below; a no-op once the rename lands.
+	defer os.Remove(tmp)
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	// CreateTemp makes the file 0600; a rendered diagram is meant to be a
+	// readable, committable artifact like any other output file.
+	if err := f.Chmod(0o644); err != nil {
+		f.Close()
+		return fmt.Errorf("chmod %s: %w", tmp, err)
+	}
+	// Close before renaming, and report its error: buffered writes can fail
+	// here (a full disk surfacing late), and ignoring that would rename a
+	// truncated file over a good one.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replace %s: %w", path, err)
+	}
+	return nil
 }
 
 // runGraph renders one slice of store's graph to out, returning what it drew.

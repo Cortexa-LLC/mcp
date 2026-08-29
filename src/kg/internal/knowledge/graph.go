@@ -304,7 +304,7 @@ func (g *Graph) Subgraph(opts GraphOptions) (Subgraph, error) {
 	}
 
 	if opts.RootID == "" {
-		g.selectAll(admit)
+		g.selectAll(admit, full)
 	} else {
 		g.walk(opts.RootID, opts.Depth, dir, relTypes, admit, full)
 	}
@@ -320,14 +320,20 @@ func (g *Graph) Subgraph(opts GraphOptions) (Subgraph, error) {
 
 // selectAll admits every node in the graph, in a stable order so that a
 // truncated whole-graph render keeps the same nodes between runs.
-func (g *Graph) selectAll(admit func(string, int) bool) {
+func (g *Graph) selectAll(admit func(string, int) bool, full func() bool) {
 	all := make([]GraphNode, 0, len(g.nodes))
 	for _, n := range g.nodes {
 		all = append(all, n)
 	}
 	sortNodes(all)
 	for _, n := range all {
-		admit(n.ID, 0)
+		// Same shape as walk: a rejected node plus an exhausted budget means
+		// nothing further can be admitted, so stop rather than walk the rest
+		// of the graph. Checking after the call matters — admit is what sets
+		// Truncated when it finds the budget spent.
+		if !admit(n.ID, 0) && full() {
+			return
+		}
 	}
 }
 

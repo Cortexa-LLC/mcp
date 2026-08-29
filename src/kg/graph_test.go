@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -247,4 +249,83 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// A failed render must leave an existing -o file exactly as it was.
+//
+// The command previously opened the output with os.Create up front, which is
+// O_TRUNC, so the file was emptied before flag validation, --root resolution,
+// or the store open had run. The documented workflow is to commit a diagram
+// and refresh it with the same command, so a mistyped flag or a renamed root
+// entity would destroy the committed file and then report an error.
+func TestGraphOutputSurvivesFailedRender(t *testing.T) {
+	// Somewhere with no project, so opening the store fails rather than
+	// touching a real one.
+	t.Chdir(t.TempDir())
+
+	path := filepath.Join(t.TempDir(), "diagram.mmd")
+	const original = "graph TD\n  Committed --> Diagram\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("seed %s: %v", path, err)
+	}
+
+	graphOutput = path
+	graphFormat = "not-a-real-format"
+	t.Cleanup(func() { graphOutput = ""; graphFormat = "mermaid" })
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := graphCmd.RunE(cmd, nil); err == nil {
+		t.Fatal("expected the render to fail")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back %s: %v", path, err)
+	}
+	if string(got) != original {
+		t.Errorf("output file = %q after a failed render, want it untouched (%q)", got, original)
+	}
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.mmd")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := writeFileAtomic(path, []byte("fresh")); err != nil {
+		t.Fatalf("writeFileAtomic: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != "fresh" {
+		t.Errorf("content = %q, want %q", got, "fresh")
+	}
+
+	// CreateTemp makes 0600; a rendered diagram should be readable like any
+	// other output file rather than inheriting the temp file's mode.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("mode = %v, want 0644", perm)
+	}
+
+	// No temporary files left behind.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Errorf("directory holds %v, want just the target file", names)
+	}
 }
