@@ -374,30 +374,32 @@ Resolution rules:
   node instead of a dependency map.
 - **Ambiguity is skipped, never guessed.** If the matched package is defined in
   more than one layer, no edge is drawn and the count is reported. On the estate
-  this discards 3,359 imports against 2,525 kept — the majority case, not an
+  this discards 3,355 imports against 2,532 kept — the majority case, not an
   edge case.
 - **Same-layer resolutions are dropped**; that structure is already in the
   layer's own graph.
 - `--no-derived` turns the whole thing off, leaving only recorded relations.
 
-**Only dotted namespaces resolve.** Not one `package` entity in the measured
-estate has a `/` in its name — the indexers do not mint package entities for npm
-or Go module paths — so JVM, Scala and Kotlin layers get derived links and
-JavaScript and Go layers get none. That is a gap in what is indexed rather than
-in the matching, and closing it is an indexer change.
+**Only dotted namespaces resolve**, and only for languages whose package
+declarations are indexed:
 
-> ⚠️ **The figures in this section predate JVM package indexing and are pending
-> re-measurement** — including the 3,359/2,525 split above and the load cost below.
-> They were measured when Go was the only source of package entities, which the
-> specificity floor filters out. See
-> [kg-graph-linking-design.md § Pending re-measurement](kg-graph-linking-design.md#pending-re-measurement)
-> for the full list and what is expected to change.
+| Language | Package entity | Linkable |
+|---|---|---|
+| Scala | dotted namespace (`com.depop.auth.client`) | yes |
+| Java, Kotlin | dotted namespace | yes, once the graph is re-indexed with kg ≥ `5211bc2` |
+| Go | bare identifier (`auth`) | no — one segment, below the specificity floor |
+| TypeScript, JavaScript, Python, C/C++ | none | no |
+
+Not one `package` entity in the measured estate has a `/` in its name, so npm and
+Go module paths have nothing to resolve against. That is a gap in what is indexed
+rather than in the matching, and closing it is an indexer change — see
+[kg-graph-linking-design.md § Follow-up](kg-graph-linking-design.md#follow-up).
 
 **Cost.** Databases are read one at a time and released, so peak memory is the
 merged graph plus the largest single layer rather than all of them at once.
-Measured on a 61-layer estate — 668k entities, 1.2M relations — a full load is
-about 6 seconds and 1.2 GB resident. Use `--layer` to narrow it when you know
-which layers you care about.
+Measured on a 61-layer estate — 718k entities, 1.2M relations merged — a full
+load is about 8 seconds and 1.3 GB resident. Use `--layer` to narrow it when you
+know which layers you care about.
 
 ---
 
