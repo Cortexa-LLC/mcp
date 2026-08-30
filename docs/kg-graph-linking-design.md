@@ -4,53 +4,73 @@
 
 ## Re-measured — 2026-08-29
 
-The figures below were re-derived against the estate with `kg` at `3ac2f1a`, and they
-hold. An earlier revision of this section warned that they could not be trusted because
-they predated JVM package indexing. **That warning rested on a mistaken premise and is
-withdrawn**; what follows is why, because the same mistake is easy to repeat.
+The estate was re-indexed with `kg` at `3ac2f1a` and every figure re-derived. Two
+corrections came out of it, one about history and one about what re-indexing does.
 
-The claim was that the only package entities `kg index` minted before `5211bc2` were
-Go's bare identifiers, which this proposal's three-segment floor discards — so the
-derived edges could not have come from indexed data. Two facts contradict it:
+### The warning this replaces was built on a wrong premise
+
+An earlier revision said the figures could not be trusted because before `5211bc2`
+the only package entities `kg index` minted were Go's bare identifiers, which the
+three-segment floor discards. Two facts contradict that:
 
 - `indexer_treesitter.go` at `5211bc2^` already matched `package_clause` generically,
   and that tree-sitter node type is **Scala as well as Go**. `5211bc2` added Java
   (`package_declaration`) and Kotlin (`package_header`); it did not add Scala.
-- The estate's databases, indexed on 2026-08-26 by `v0.1.0-34-g6c5886e`, hold **4,385
-  package entities with three or more dotted segments**. Spot-checking one —
-  `package:backend_driven.models.item` — resolves to `.scala` files under
-  `mobile-api-browse/app/backend_driven/models/item/`.
+- The pre-`5211bc2` databases held 4,300 package entities with three or more dotted
+  segments. Spot-checking `package:backend_driven.models.item` resolved it to `.scala`
+  files under `mobile-api-browse/app/backend_driven/models/item/`.
 
-So the derived edges did come from indexed data: Scala's.
+So the original figures did come from indexed data — Scala's.
 
-| Figure | Was | Re-measured |
+### Re-indexing lowers the derived-edge count
+
+The expectation on record was that indexing more package declarations would raise the
+number of derived edges. It halves it, and the reason is worth keeping.
+
+| Figure | Before re-index | After |
 |---|---|---|
-| Derived `DEPENDS_ON` edges | 2,525 | **2,532** |
-| Ambiguous imports discarded | 3,359 | 3,355 |
-| Same-layer resolutions left alone | 5,031 | 5,046 |
-| Full-load cost | ~6 s, 1.2 GB | 7.6 s, 1.30 GB |
+| Package entities | 5,138 | **7,031** |
+| …linkable (3+ segments) | 4,300 | **6,140** |
+| Derived `DEPENDS_ON` edges | 2,532 | **2,240** |
+| Distinct import names resolving | 845 | **557** |
+| Same-layer, left alone | 5,046 | **12,832** |
+| Ambiguous, skipped | 3,355 | 3,346 |
+| Federated merge | 717,633 nodes / 1,229,204 rel | 719,575 / 1,238,257 |
+| Full-load cost | 7.6 s, 1.30 GB | 7.0 s, 1.33 GB |
 
-The +7 is not noise. It is the wildcard-import fix that landed after this proposal
-shipped: a Java `import com.x.y.*;` reaches the resolver as a string identical to the
-package name, and the original loop tested only *proper* prefixes, so every one was
-dropped silently. See `resolvePackage`.
+309 previously-derived links disappeared and 21 appeared. Sampling the ones that went
+shows both mechanisms, and both are the rule behaving correctly on better data:
 
-Estate size reads as 717,633 nodes / 1,229,204 relations under the shipped join policy,
-against the 667,858 / 1,223,605 in [§Problem](#problem). Same data, different merge: the
-figures in §Problem were taken when every entity type joined across layers, which is the
-behaviour this proposal removed. Both are correct measurements of their own moment.
+- **The package is now defined in the importing layer too.** `com.depop.common` was
+  indexed only in `libraries`, so every `clients` import of it looked like a
+  cross-repo dependency. Kotlin indexing means `clients` now declares it as well, the
+  name resolves to two layers, and the one-layer rule abstains rather than guessing.
+- **A more specific package now matches.** Longest-prefix resolution finds a local
+  `com.depop.backenddrivenui.models.parameter` where it previously had to settle for a
+  shorter name defined elsewhere — so the import is same-layer and no edge is drawn,
+  which is why that count more than doubled.
 
-### What a re-index would actually change
+**The earlier cross-layer links were partly artifacts of incomplete indexing.** A
+dependency edge drawn because the importing repository's own copy of a package had not
+been indexed is not a dependency. Fewer edges here is a more truthful graph, not a
+regression — and it sharpens
+[open question 3](#open-questions): completeness of indexing *increases* ambiguity, so
+the one-layer rule discards more as coverage improves.
 
-A newer binary reading older databases changes nothing here — package entities are minted
-at **index time**, so `5211bc2`'s Java and Kotlin support only reaches a graph that is
-re-indexed after it.
+### What the re-index cost, and an earlier miscount
 
-That is worth doing on its own merits, but not for these numbers. By file count the
-estate holds 12,537 `.scala` files (already indexed), **75 `.java`**, and **0 `.kotlin`**.
-Re-indexing to pick up `5211bc2` would add package declarations for seventy-five files.
-The genuinely unindexed mass is elsewhere — 2,634 Python, 852 TypeScript and 510 Go files,
-none of which `5211bc2` touched, and which [§Follow-up](#follow-up) covers.
+971 s for all 61 scopes, no failures, entities +1,901 and relations +8,709 with no
+scope losing any. **All 420 observations survived** — the selective re-index preserves
+hand-written knowledge as designed.
+
+An earlier draft of this section put the value of re-indexing at "seventy-five `.java`
+files and no Kotlin". That was measured with `find -maxdepth 4`, which misses source
+trees nested deeper than four levels — the whole Android app among them. The estate
+actually holds **30,906 `.scala`, 7,591 `.kt` and 1,835 `.java`** files, so `5211bc2`
+gave package declarations to roughly nine thousand files, not seventy-five.
+
+Still unindexed, and unchanged by `5211bc2`: Python, TypeScript and Go, which
+[§Follow-up](#follow-up) covers.
 
 ## Problem
 
@@ -249,9 +269,10 @@ Re-run the measurement. The success condition is not "more edges" — it is that
 **every surviving cross-layer relation can be traced to a package an import names**,
 and the count of name-coincidence edges is zero under default settings.
 
-Yield on the estate, as implemented: **2,532 derived `DEPENDS_ON` edges**
-(2,525 as first shipped, before the wildcard-import fix), replacing 67,263
-manufactured ones.
+Yield on the estate, as implemented: **2,240 derived `DEPENDS_ON` edges** on the
+re-indexed estate, replacing 67,263 manufactured ones. (2,525 as first shipped;
+2,532 after the wildcard-import fix; see [§Re-measured](#re-measured--2026-08-29)
+for why better indexing lowers the count.)
 
 > Re-derived 2026-08-29 against the estate — see
 > [§Re-measured](#re-measured--2026-08-29) at the top of this document.

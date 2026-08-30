@@ -230,6 +230,8 @@ Error: "main" matches 2 entities — use an ID instead:
 | `--rel` | *(all)* | Only follow these relation types |
 | `--limit` | `200` | Maximum nodes; `0` for no limit |
 | `--output`, `-o` | *(stdout)* | Write to a file |
+| `--scope` | *(default scope)* | Which scope's database to read |
+| `--personal` | off | Read the personal store instead of this project's graph |
 | `--federated` | off | Render the scope together with every *local* layer it federates with |
 | `--layer` | *(all)* | With `--federated`, load only these scopes |
 | `--join-max-layers` | `3` | With `--federated`, the boilerplate guard (see below) |
@@ -374,8 +376,8 @@ Resolution rules:
   node instead of a dependency map.
 - **Ambiguity is skipped, never guessed.** If the matched package is defined in
   more than one layer, no edge is drawn and the count is reported. On the estate
-  this discards 3,355 imports against 2,532 kept — the majority case, not an
-  edge case.
+  this discards 3,346 imports against 2,240 kept — the majority case, not an
+  edge case, and it grows as indexing coverage improves.
 - **Same-layer resolutions are dropped**; that structure is already in the
   layer's own graph.
 - `--no-derived` turns the whole thing off, leaving only recorded relations.
@@ -386,7 +388,7 @@ declarations are indexed:
 | Language | Package entity | Linkable |
 |---|---|---|
 | Scala | dotted namespace (`com.depop.auth.client`) | yes |
-| Java, Kotlin | dotted namespace | yes, once the graph is re-indexed with kg ≥ `5211bc2` |
+| Java, Kotlin | dotted namespace | yes, on a graph indexed with kg ≥ `5211bc2` |
 | Go | bare identifier (`auth`) | no — one segment, below the specificity floor |
 | TypeScript, JavaScript, Python, C/C++ | none | no |
 
@@ -397,8 +399,8 @@ rather than in the matching, and closing it is an indexer change — see
 
 **Cost.** Databases are read one at a time and released, so peak memory is the
 merged graph plus the largest single layer rather than all of them at once.
-Measured on a 61-layer estate — 718k entities, 1.2M relations merged — a full
-load is about 8 seconds and 1.3 GB resident. Use `--layer` to narrow it when you
+Measured on a 61-layer estate — 720k entities, 1.2M relations merged — a full
+load is about 7 seconds and 1.3 GB resident. Use `--layer` to narrow it when you
 know which layers you care about.
 
 ---
