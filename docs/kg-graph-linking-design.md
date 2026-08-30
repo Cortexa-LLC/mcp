@@ -2,39 +2,75 @@
 
 **Status:** implemented · gate run and passed · **Date:** 2026-08-26 · **Follows:** PR #5 (`kg graph`), PR #6 (`--federated`)
 
-## Pending re-measurement
+## Re-measured — 2026-08-29
 
-> ⚠️ **Every estate figure in this document, and in the `--federated` section of
-> [kg-cli-reference.md](kg-cli-reference.md#kg-graph), was measured before JVM package
-> indexing shipped.**
+The estate was re-indexed with `kg` at `3ac2f1a` and every figure re-derived. Two
+corrections came out of it, one about history and one about what re-indexing does.
 
-At the time, the only package entities `kg index` minted were Go's bare identifiers,
-which this proposal's specificity floor filters out — so the derived edges reported below
-cannot have come from an estate indexed by the binary that was current when they were
-written. They are retained as the record of what was reasoned about, not as current
-output.
+### The warning this replaces was built on a wrong premise
 
-Re-deriving them needs the estate itself, on a machine running `kg` at `5211bc2` or
-later. This section is the single place tracking that: update the figures in place and
-delete this section when they are reproduced.
+An earlier revision said the figures could not be trusted because before `5211bc2`
+the only package entities `kg index` minted were Go's bare identifiers, which the
+three-segment floor discards. Two facts contradict that:
 
-| Figure | Value on record | Where |
+- `indexer_treesitter.go` at `5211bc2^` already matched `package_clause` generically,
+  and that tree-sitter node type is **Scala as well as Go**. `5211bc2` added Java
+  (`package_declaration`) and Kotlin (`package_header`); it did not add Scala.
+- The pre-`5211bc2` databases held 4,300 package entities with three or more dotted
+  segments. Spot-checking `package:backend_driven.models.item` resolved it to `.scala`
+  files under `mobile-api-browse/app/backend_driven/models/item/`.
+
+So the original figures did come from indexed data — Scala's.
+
+### Re-indexing lowers the derived-edge count
+
+The expectation on record was that indexing more package declarations would raise the
+number of derived edges. It halves it, and the reason is worth keeping.
+
+| Figure | Before re-index | After |
 |---|---|---|
-| Estate size | 61 layers, 667,858 entities, 1,223,605 relations | this doc [§Problem](#problem); cli-ref (as 668k / 1.2M) |
-| Distinct package names / import names | 5,138 / 50,993 | this doc [§Measurement gate](#measurement-gate--result) |
-| Gate prediction — unambiguous cross-layer matches | 845 | this doc §Measurement gate, [§Acceptance](#acceptance), [§Open questions](#open-questions) |
-| Prefix-match resolutions before the one-layer rule | 3,204 | this doc §Open questions |
-| Derived `DEPENDS_ON` edges as implemented | **2,525** | this doc §Acceptance; cli-ref |
-| Ambiguous imports discarded | 3,359 | cli-ref |
-| Manufactured edges the rule replaced | 67,263 | this doc §Problem, §Acceptance |
-| Full-load cost | ~6 s, 1.2 GB resident | cli-ref |
+| Package entities | 5,138 | **7,031** |
+| …linkable (3+ segments) | 4,300 | **6,140** |
+| Derived `DEPENDS_ON` edges | 2,532 | **2,240** |
+| Distinct import names resolving | 845 | **557** |
+| Same-layer, left alone | 5,046 | **12,832** |
+| Ambiguous, skipped | 3,355 | 3,346 |
+| Federated merge | 717,633 nodes / 1,229,204 rel | 719,575 / 1,238,257 |
+| Full-load cost | 7.6 s, 1.30 GB | 7.0 s, 1.33 GB |
 
-The package-name count and the derived-edge count should both **rise**: Java, Kotlin, and
-Scala layers contributed zero package entities to the numbers above and now contribute
-dotted namespaces, which is exactly what this rule resolves against. Note also that
-cli-ref's claim that “JVM, Scala and Kotlin layers get derived links” describes the
-intended behaviour and only became true with that indexing change — it is not what the
-measured binary did.
+309 previously-derived links disappeared and 21 appeared. Sampling the ones that went
+shows both mechanisms, and both are the rule behaving correctly on better data:
+
+- **The package is now defined in the importing layer too.** `com.depop.common` was
+  indexed only in `libraries`, so every `clients` import of it looked like a
+  cross-repo dependency. Kotlin indexing means `clients` now declares it as well, the
+  name resolves to two layers, and the one-layer rule abstains rather than guessing.
+- **A more specific package now matches.** Longest-prefix resolution finds a local
+  `com.depop.backenddrivenui.models.parameter` where it previously had to settle for a
+  shorter name defined elsewhere — so the import is same-layer and no edge is drawn,
+  which is why that count more than doubled.
+
+**The earlier cross-layer links were partly artifacts of incomplete indexing.** A
+dependency edge drawn because the importing repository's own copy of a package had not
+been indexed is not a dependency. Fewer edges here is a more truthful graph, not a
+regression — and it sharpens
+[open question 3](#open-questions): completeness of indexing *increases* ambiguity, so
+the one-layer rule discards more as coverage improves.
+
+### What the re-index cost, and an earlier miscount
+
+971 s for all 61 scopes, no failures, entities +1,901 and relations +8,709 with no
+scope losing any. **All 420 observations survived** — the selective re-index preserves
+hand-written knowledge as designed.
+
+An earlier draft of this section put the value of re-indexing at "seventy-five `.java`
+files and no Kotlin". That was measured with `find -maxdepth 4`, which misses source
+trees nested deeper than four levels — the whole Android app among them. The estate
+actually holds **30,906 `.scala`, 7,591 `.kt` and 1,835 `.java`** files, so `5211bc2`
+gave package declarations to roughly nine thousand files, not seventy-five.
+
+Still unindexed, and unchanged by `5211bc2`: Python, TypeScript and Go, which
+[§Follow-up](#follow-up) covers.
 
 ## Problem
 
@@ -233,18 +269,20 @@ Re-run the measurement. The success condition is not "more edges" — it is that
 **every surviving cross-layer relation can be traced to a package an import names**,
 and the count of name-coincidence edges is zero under default settings.
 
-Yield on the estate, as implemented: **2,525 derived `DEPENDS_ON` edges**,
-replacing 67,263 manufactured ones.
+Yield on the estate, as implemented: **2,240 derived `DEPENDS_ON` edges** on the
+re-indexed estate, replacing 67,263 manufactured ones. (2,525 as first shipped;
+2,532 after the wildcard-import fix; see [§Re-measured](#re-measured--2026-08-29)
+for why better indexing lowers the count.)
 
-> These figures predate JVM package indexing — see
-> [Pending re-measurement](#pending-re-measurement) at the top of this document.
+> Re-derived 2026-08-29 against the estate — see
+> [§Re-measured](#re-measured--2026-08-29) at the top of this document.
 
 The gate predicted 845, and both numbers are right: 845 is the count of distinct
-import *names* that resolve, while 2,525 counts import *nodes* — the same name
-appears as a separate node in each layer that imports it, since imports join only
-across three layers or fewer. Verified by recomputing the rule independently
-against the shipped output: 2,525 = 2,525, and the name count reproduces 845
-exactly.
+import *names* that resolve, while the 2,525 shipped at the time counted import
+*nodes* — the same name appears as a separate node in each layer that imports it,
+since imports join only across three layers or fewer. Verified by recomputing the
+rule independently against the shipped output: 2,525 = 2,525, and the name count
+reproduced 845 exactly.
 
 ## Follow-up
 
@@ -256,13 +294,13 @@ exactly.
 | Go | bare identifier (`auth`) | no — one segment, below the specificity floor |
 | TypeScript, JavaScript, Python, C/C++ | none | no |
 
-An earlier draft of this section had that backwards, saying the indexers mint
-package entities "only for dotted namespaces". The reverse was true when it was
-written: Go's `package_clause` was the *only* source, and a Go package name never
-contains a dot, so every package entity was filtered out and this proposal
-derived nothing from indexed data. JVM package declarations were not indexed at
-all until they were added separately (see the package-indexing change that
-precedes this one), which is what makes the rule above work.
+This table has been wrong in both directions. An early draft said the indexers
+mint package entities "only for dotted namespaces", which understated Go. The
+correction then overshot, asserting that Go's `package_clause` was the *only*
+source and that every package entity was therefore filtered out — but
+`package_clause` is Scala's node type too, so Scala has been minting dotted
+package names since well before `5211bc2`. That change added Java and Kotlin.
+See [§Re-measured](#re-measured--2026-08-29).
 
 The remaining gap is npm and Go. Reading `package.json` `name` fields and
 `go.mod` module paths would give the web, client and tooling layers a namespace
@@ -278,16 +316,22 @@ and not first.
 ## Open questions
 
 1. ~~Does package linking find anything?~~ **Answered by the gate:** yes, with
-   prefix matching (845 unambiguous cross-layer edges); no, with exact matching (71,
-   mostly generic). The matching rule in §2 changed accordingly.
+   prefix matching (845 unambiguous cross-layer resolutions at the time, 557 on the
+   re-indexed estate); no, with exact matching (71, mostly generic). The matching rule
+   in §2 changed accordingly.
 2. ~~Naming conventions across ecosystems.~~ **Answered:** dotted namespaces resolve;
    npm and Go produce nothing because no package entity name contains a `/`. Fixing
    that is an indexer change — see [Follow-up](#follow-up).
-3. **Is 74% ambiguity acceptable?** Prefix matching finds 3,204 cross-layer
-   resolutions but only 845 survive the "package defined in exactly one layer" rule.
-   The discarded ones are mostly packages genuinely duplicated across repos. Options:
-   accept the loss, draw them to all candidate layers with a marker, or rank by layer
-   priority. Proposal: accept the loss in v1 and report the count.
+3. **Is the ambiguity rule still acceptable?** On the re-indexed estate it discards
+   3,346 imports and keeps 2,240 — and the discarded share *grows as indexing coverage
+   improves*, because a package indexed in more repositories resolves to more layers.
+   The linking therefore gets weaker over time rather than stronger, which the
+   [re-measurement](#re-measured--2026-08-29) is the evidence for. The discarded ones
+   are mostly packages genuinely duplicated across repos. Options: accept the loss;
+   draw to all candidate layers with a marker; rank by layer priority; or prefer the
+   importing layer's own definition, which would reclassify most of these as
+   same-layer and draw nothing — the truthful answer in the `com.depop.common` case.
+   v1 accepts the loss and reports the count; that is worth revisiting first.
 4. **Should `type` join by default?** `AddressClient` argues yes, `CodingKeys` argues
    no. Proposal: off, revisited once derived edges exist and can be compared against.
 

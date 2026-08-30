@@ -12,14 +12,17 @@ everything below it is unreleased.
 ### Added
 
 - **`kg graph`** — render the knowledge graph as mermaid, DOT, or JSON, with `--root`,
-  `--depth`, `--type`, and `--limit`. `--federated` renders across every layer. (#5)
+  `--depth`, `--type`, and `--limit`. (#5)
+- **`kg graph --federated`** — one graph across a scope and every local layer it
+  federates with, grouped into a subgraph per layer. (#6)
 - **Cross-layer entity linking** for `kg graph --federated`: derived `DEPENDS_ON` edges
   are resolved from imports to the packages they name, replacing the `(name, type)`
   join that manufactured edges nobody recorded. `--join-types` and `--no-derived`
-  control it. (#7, [design](docs/kg-graph-linking-design.md))
-- **Package declarations indexed for Java, Kotlin, and Scala**, giving JVM layers the
-  dotted namespaces cross-layer linking needs. Previously only Go minted package
-  entities, and a Go package name has no dot to match on.
+  control it. (#7 design, #10 implementation, [design](docs/kg-graph-linking-design.md))
+- **Package declarations indexed for Java and Kotlin**, giving those layers the dotted
+  namespaces cross-layer linking needs. Scala already had them: its `package_clause` is
+  the same tree-sitter node Go uses, and the indexer matched it generically. Go's own
+  package names are single identifiers with no dot to match on.
 - **Shared knowledge hub** — `kg hub serve` and `kg hub list` host read-only graphs;
   `kg push` seeds them. Hub graphs federate into local search as remote layers, queried
   in place rather than downloaded.
