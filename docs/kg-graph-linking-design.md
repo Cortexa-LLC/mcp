@@ -316,16 +316,22 @@ and not first.
 ## Open questions
 
 1. ~~Does package linking find anything?~~ **Answered by the gate:** yes, with
-   prefix matching (845 unambiguous cross-layer edges); no, with exact matching (71,
-   mostly generic). The matching rule in §2 changed accordingly.
+   prefix matching (845 unambiguous cross-layer resolutions at the time, 557 on the
+   re-indexed estate); no, with exact matching (71, mostly generic). The matching rule
+   in §2 changed accordingly.
 2. ~~Naming conventions across ecosystems.~~ **Answered:** dotted namespaces resolve;
    npm and Go produce nothing because no package entity name contains a `/`. Fixing
    that is an indexer change — see [Follow-up](#follow-up).
-3. **Is 74% ambiguity acceptable?** Prefix matching finds 3,204 cross-layer
-   resolutions but only 845 survive the "package defined in exactly one layer" rule.
-   The discarded ones are mostly packages genuinely duplicated across repos. Options:
-   accept the loss, draw them to all candidate layers with a marker, or rank by layer
-   priority. Proposal: accept the loss in v1 and report the count.
+3. **Is the ambiguity rule still acceptable?** On the re-indexed estate it discards
+   3,346 imports and keeps 2,240 — and the discarded share *grows as indexing coverage
+   improves*, because a package indexed in more repositories resolves to more layers.
+   The linking therefore gets weaker over time rather than stronger, which the
+   [re-measurement](#re-measured--2026-08-29) is the evidence for. The discarded ones
+   are mostly packages genuinely duplicated across repos. Options: accept the loss;
+   draw to all candidate layers with a marker; rank by layer priority; or prefer the
+   importing layer's own definition, which would reclassify most of these as
+   same-layer and draw nothing — the truthful answer in the `com.depop.common` case.
+   v1 accepts the loss and reports the count; that is worth revisiting first.
 4. **Should `type` join by default?** `AddressClient` argues yes, `CodingKeys` argues
    no. Proposal: off, revisited once derived edges exist and can be compared against.
 
