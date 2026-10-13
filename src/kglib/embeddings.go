@@ -72,9 +72,11 @@ func (s *Store) BatchEmbed(ctx context.Context, projectID string, embedder Embed
 			"results are matched by position, so a mismatched count cannot be used", len(obsEmbeddings), len(obsTexts))
 	}
 
-	// Store observation embeddings
+	// Store observation embeddings. projectID is the project BatchEmbed is
+	// embedding (GetUnembeddedObservations filtered on it), so it scopes the
+	// write to this project's observation rows.
 	for i, obs := range observations {
-		if err := s.SetObservationEmbedding(obs.ID, obsEmbeddings[i]); err != nil {
+		if err := s.SetObservationEmbedding(obs.ID, projectID, obsEmbeddings[i]); err != nil {
 			return fmt.Errorf("set embedding for observation %s: %w", obs.ID, err)
 		}
 	}
@@ -182,12 +184,19 @@ func (s *Store) SetEmbedding(entityID, projectID string, embedding []float32) er
 	return nil
 }
 
-// SetObservationEmbedding stores an embedding vector for an observation
-func (s *Store) SetObservationEmbedding(observationID string, embedding []float32) error {
+// SetObservationEmbedding stores an embedding vector for an observation.
+//
+// Matched by the project-namespaced pk, consistent with SetEmbedding and every
+// other write: an observation id is a UUID so a cross-project collision is
+// unlikely, but a bare-id match is the same project-blind pattern this change
+// removes elsewhere, and there is no reason to leave one write path on it. No
+// !hasPK fallback is needed — writes only happen on a read-write open, which
+// refuses a pre-pk database outright (see openStoreWithConfig).
+func (s *Store) SetObservationEmbedding(observationID, projectID string, embedding []float32) error {
 	result, err := s.QueryParams(`
-		MATCH (o:Observation {id: $id})
+		MATCH (o:Observation {pk: $pk})
 		SET o.embedding = $embedding
-	`, map[string]any{"id": observationID, "embedding": embedding})
+	`, map[string]any{"pk": PK(projectID, observationID), "embedding": embedding})
 	if err != nil {
 		return fmt.Errorf("set observation embedding: %w", err)
 	}

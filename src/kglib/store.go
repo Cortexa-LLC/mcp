@@ -194,6 +194,13 @@ func openDiagnostic(dbPath string, readOnly bool, err error) error {
 	return fmt.Errorf("open kuzu database: %w", err)
 }
 
+// HasPK reports whether this database carries the project-namespaced pk primary
+// key. It is false for a pre-pk database — one written before the pk column
+// existed — which a read-only open can still read but a read-write open refuses.
+// Exposed so the migration path can distinguish an unstamped-but-current
+// database (leave alone) from an unstamped pre-pk one (archive and rebuild).
+func (s *Store) HasPK() bool { return s.hasPK }
+
 // Close closes the database connection.
 // It acquires mu to ensure no query is in flight while closing.
 func (s *Store) Close() error {
