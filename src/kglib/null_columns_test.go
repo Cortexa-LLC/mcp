@@ -211,7 +211,7 @@ func TestBatchEmbed_RejectsShortObservationResponse(t *testing.T) {
 	}
 	// Give the single entity its embedding so BatchEmbed reaches the observation
 	// stage, then under-deliver there.
-	if err := store.SetEmbedding(entity.ID, make([]float32, embeddingDim)); err != nil {
+	if err := store.SetEmbedding(entity.ID, projectID, make([]float32, embeddingDim)); err != nil {
 		t.Fatalf("SetEmbedding: %v", err)
 	}
 

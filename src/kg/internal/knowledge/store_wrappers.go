@@ -28,6 +28,12 @@ func OpenStoreReadOnly(dbPath string) (*kglib.Store, error) {
 	return kglib.OpenStoreReadOnly(dbPath)
 }
 
+// PK derives the project-namespaced primary key for an entity or observation.
+// Re-exported from kglib so the indexer's bulk-load (COPY/CREATE) paths derive
+// pk through the exact same helper the Store's own writes use — the NUL-join
+// format must match byte-for-byte or endpoints and nodes would not resolve.
+var PK = kglib.PK
+
 // NewEmbedderFromEnv creates an embedder from environment variables
 var NewEmbedderFromEnv = kglib.NewEmbedderFromEnv
 

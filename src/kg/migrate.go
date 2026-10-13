@@ -42,8 +42,16 @@ func archiveIfMismatch(dbPath string, out io.Writer) (string, error) {
 		return "", nil
 	}
 
-	fmt.Fprintf(out, "🔄 %s was written by kuzu %s; this build uses %s. Rebuilding.\n",
-		dbPath, stamp.KuzuVersion, kglib.KuzuVersion())
+	// A mismatch is either a storage-format (Kuzu) bump or a kg schema bump; the
+	// message names whichever actually differs so a same-Kuzu schema change does
+	// not print the confusing "written by kuzu X; this build uses X".
+	if stamp.KuzuVersion != kglib.KuzuVersion() {
+		fmt.Fprintf(out, "🔄 %s was written by kuzu %s; this build uses %s. Rebuilding.\n",
+			dbPath, stamp.KuzuVersion, kglib.KuzuVersion())
+	} else {
+		fmt.Fprintf(out, "🔄 %s uses kg schema v%d; this build needs v%d. Rebuilding.\n",
+			dbPath, stamp.SchemaVersion, kglib.CurrentSchemaVersion)
+	}
 
 	aside, err := kglib.ArchiveDatabase(dbPath)
 	if err != nil {

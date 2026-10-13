@@ -167,7 +167,7 @@ func TestSetEmbedding_HNSWInvalidation(t *testing.T) {
 	for i := range embedding {
 		embedding[i] = float32(i) * 0.1
 	}
-	if err := store.SetEmbedding(entity.ID, embedding); err != nil {
+	if err := store.SetEmbedding(entity.ID, projectID, embedding); err != nil {
 		t.Fatalf("SetEmbedding: %v", err)
 	}
 

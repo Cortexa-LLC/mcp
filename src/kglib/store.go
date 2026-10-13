@@ -33,6 +33,7 @@ type Store struct {
 	allowedRelTypes []string          // configured relation types for validation
 	journal         *Journal          // hand-write journal; nil unless EnableJournal was called
 	hasVisibility   bool              // Entity.visibility exists in this database (see entityColumns)
+	hasPK           bool              // Entity.pk (project-namespaced primary key) exists; false on pre-pk databases
 }
 
 // OpenStore opens or creates a Kuzu database in read-write mode with the given schema configuration.
@@ -104,21 +105,40 @@ func openStoreWithConfig(dbPath string, readOnly bool, cfg *SchemaConfig) (*Stor
 			store.Close()
 			return nil, fmt.Errorf("initialize schema: %w", err)
 		}
-
-		// Record which engine build wrote this database. Reaching this point
-		// proves the running engine can read the format, so the stamp is
-		// truthful by construction. It is a sidecar rather than a row in the
-		// database because its whole job is to be readable when the database is
-		// not. A failure to stamp is not fatal — the database is fine, it just
-		// falls back to the unstamped path on a later version check.
-		_ = WriteFormatStamp(dbPath, buildVersion)
 	}
 
 	// Which optional columns this database actually has. After initSchema on a
-	// write open, so a freshly-migrated database is detected correctly; and on
+	// write open, so a freshly-created database is detected correctly; and on
 	// read-only opens too, which never migrate and so may be reading a graph
-	// written before a column existed.
+	// written before a column existed. Must run before the pk gate and the
+	// stamp below, which both depend on hasPK.
 	store.detectColumns()
+
+	if !readOnly {
+		// `CREATE NODE TABLE IF NOT EXISTS` cannot add the pk PRIMARY KEY column
+		// to an Entity table that predates it, and Kuzu has no ALTER … ADD
+		// PRIMARY KEY, so a pre-pk database opened read-write would otherwise let
+		// every pk-referencing write fail with an opaque "Cannot find property
+		// pk". Refuse clearly instead and point at the rebuild path. `kg index`
+		// and `kg migrate` archive + rebuild such a database before opening it
+		// (CheckFormat reports FormatMismatch on its lower schema_version), so
+		// they never reach this; a bare `kg add` against an un-rebuilt legacy
+		// database is what this catches.
+		if !store.hasPK {
+			store.Close()
+			return nil, fmt.Errorf(
+				"knowledge graph database at %s predates the project-namespaced primary key "+
+					"and must be rebuilt: run 'kg index' (or 'kg migrate' to rebuild every graph)", dbPath)
+		}
+
+		// Record which engine build and schema version wrote this database.
+		// Reaching this point proves the running engine can read the format, so
+		// the stamp is truthful by construction. It is a sidecar rather than a
+		// row in the database because its whole job is to be readable when the
+		// database is not. A failure to stamp is not fatal — the database is
+		// fine, it just falls back to the unstamped path on a later version check.
+		_ = WriteFormatStamp(dbPath, buildVersion)
+	}
 
 	return store, nil
 }
@@ -153,10 +173,16 @@ func openDiagnostic(dbPath string, readOnly bool, err error) error {
 					"(create one with 'kg index'): %w", dbPath, err)
 			}
 		case FormatMismatch:
-			return fmt.Errorf("knowledge graph database at %s was written by kuzu %s "+
-				"but this build uses %s; it needs rebuilding "+
+			if stamp.KuzuVersion != KuzuVersion() {
+				return fmt.Errorf("knowledge graph database at %s was written by kuzu %s "+
+					"but this build uses %s; it needs rebuilding "+
+					"(run 'kg index' to rebuild it, or 'kg migrate' to rebuild every graph): %w",
+					dbPath, stamp.KuzuVersion, KuzuVersion(), err)
+			}
+			return fmt.Errorf("knowledge graph database at %s uses kg schema v%d "+
+				"but this build needs v%d; it needs rebuilding "+
 				"(run 'kg index' to rebuild it, or 'kg migrate' to rebuild every graph): %w",
-				dbPath, stamp.KuzuVersion, KuzuVersion(), err)
+				dbPath, stamp.SchemaVersion, CurrentSchemaVersion, err)
 		}
 	}
 

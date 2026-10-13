@@ -37,10 +37,11 @@ func insertEntityWithID(t *testing.T, s *Store, id, name, entityType, projectID 
 	now := time.Now().UTC()
 	result, err := s.QueryParams(`
 		CREATE (e:Entity {
-			id: $id, name: $name, type: $type, project_id: $project_id,
+			pk: $pk, id: $id, name: $name, type: $type, project_id: $project_id,
 			created_at: $created_at, updated_at: $updated_at
 		})
 	`, map[string]any{
+		"pk": PK(projectID, id),
 		"id": id, "name": name, "type": entityType, "project_id": projectID,
 		"created_at": now, "updated_at": now,
 	})

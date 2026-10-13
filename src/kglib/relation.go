@@ -24,15 +24,21 @@ func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
 
 	// relType is a relationship label (not a value) and cannot be parameterised
 	// in Cypher. It is validated against AllowedRelTypes above before use.
+	//
+	// Endpoints are matched on pk, never on bare id. A bare-id MATCH is
+	// project-blind: with two projects in one database it can bind an endpoint to
+	// an identically-id'd node in the OTHER project, wiring the edge to the wrong
+	// graph. pk namespaces id by project, so this both targets this project's
+	// nodes and uses the indexed primary key.
 	query := fmt.Sprintf(`
 		MATCH (from:Entity), (to:Entity)
-		WHERE from.id = $from_id AND to.id = $to_id
+		WHERE from.pk = $from_pk AND to.pk = $to_pk
 		CREATE (from)-[:%s]->(to)
 	`, relType)
 
 	result, err := s.QueryParams(query, map[string]any{
-		"from_id": fromID,
-		"to_id":   toID,
+		"from_pk": PK(projectID, fromID),
+		"to_pk":   PK(projectID, toID),
 	})
 	if err != nil {
 		return fmt.Errorf("create relation: %w", err)

@@ -47,10 +47,11 @@ func TestVisibilityRoundTrips(t *testing.T) {
 	// Write directly, the way the indexer's bulk path does.
 	result, err := store.QueryParams(`
 		CREATE (e:Entity {
-			id: $id, name: $name, type: $type, project_id: $project_id,
+			pk: $pk, id: $id, name: $name, type: $type, project_id: $project_id,
 			created_at: $ts, updated_at: $ts, visibility: $visibility
 		})
 	`, map[string]any{
+		"pk": PK("p", "function:main.go:helper"),
 		"id": "function:main.go:helper", "name": "helper", "type": "function",
 		"project_id": "p", "ts": time.Now().UTC(), "visibility": VisibilityPrivate,
 	})

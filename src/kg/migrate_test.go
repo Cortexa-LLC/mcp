@@ -25,6 +25,96 @@ func stampAs(t *testing.T, dbPath, kuzuVersion string) {
 	}
 }
 
+// stampSchema rewrites the sidecar to claim an older kg schema version while
+// keeping this build's Kuzu version — the way an on-disk schema bump (e.g. the
+// pk primary key) presents on a database written by an otherwise-current build.
+func stampSchema(t *testing.T, dbPath string, schemaVersion int) {
+	t.Helper()
+	data, err := json.Marshal(kglib.FormatStamp{
+		KuzuVersion:   kglib.KuzuVersion(),
+		KGVersion:     "test",
+		SchemaVersion: schemaVersion,
+	})
+	if err != nil {
+		t.Fatalf("marshal stamp: %v", err)
+	}
+	if err := os.WriteFile(kglib.FormatStampPath(dbPath), data, 0600); err != nil {
+		t.Fatalf("write stamp: %v", err)
+	}
+}
+
+// A kg schema-version bump (not a Kuzu bump) must also trigger archive + rebuild
+// and carry hand-written knowledge across via journal replay. This is the
+// migration path the pk primary key rides: Kuzu cannot ALTER … ADD PRIMARY KEY,
+// so an older-schema database is rebuilt fresh and its journal replayed.
+func TestSchemaVersionBumpRebuildsAndRestoresHandWrites(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "knowledge.db")
+
+	store, err := knowledge.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	store.EnableJournal()
+	entity, err := store.CreateEntity("retry-policy", "decision", "proj")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err := store.CreateObservation(entity.ID, "three attempts, exponential backoff", "proj"); err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+	store.Close()
+
+	// Same Kuzu build, but an older schema than this build writes.
+	stampSchema(t, dbPath, kglib.CurrentSchemaVersion-1)
+
+	status, _, err := kglib.CheckFormat(dbPath)
+	if err != nil {
+		t.Fatalf("CheckFormat: %v", err)
+	}
+	if status != kglib.FormatMismatch {
+		t.Fatalf("an older schema_version was not reported as a mismatch: got %v", status)
+	}
+
+	var out bytes.Buffer
+	rebuilt, err := rebuildHandWritesOnly(dbPath, &out)
+	if err != nil {
+		t.Fatalf("rebuildHandWritesOnly: %v", err)
+	}
+	if !rebuilt {
+		t.Fatal("a database with an older kg schema was not rebuilt")
+	}
+
+	fresh, err := knowledge.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open rebuilt store: %v", err)
+	}
+	defer fresh.Close()
+
+	restored, err := fresh.GetEntityByNameAndType("retry-policy", "decision", "proj")
+	if err != nil {
+		t.Fatalf("GetEntityByNameAndType: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("hand-written entity did not survive the schema rebuild")
+	}
+	observations, err := fresh.GetObservations(restored.ID, "proj")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(observations) != 1 || observations[0].Content != "three attempts, exponential backoff" {
+		t.Errorf("observations = %+v, want the hand-written note", observations)
+	}
+
+	// The rebuilt database is stamped at the current schema, so it is FormatOK.
+	status, _, err = kglib.CheckFormat(dbPath)
+	if err != nil {
+		t.Fatalf("CheckFormat after rebuild: %v", err)
+	}
+	if status != kglib.FormatOK {
+		t.Errorf("status after rebuild = %v, want %v", status, kglib.FormatOK)
+	}
+}
+
 // The whole point of Phase 4, end to end: hand-written knowledge survives a
 // storage-format change with no old binary involved and no user action.
 func TestEnsureFormatRebuildsAndRestoresHandWrites(t *testing.T) {

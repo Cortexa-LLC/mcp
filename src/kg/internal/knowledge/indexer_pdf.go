@@ -161,10 +161,11 @@ func (idx *Indexer) processPDFFile(
 			continue
 		}
 		*observations = append(*observations, obsRecord{
-			id:       uuid.NewString(),
-			entityID: entityID,
-			content:  chunk,
-			created:  now,
+			id:        uuid.NewString(),
+			entityID:  entityID,
+			content:   chunk,
+			created:   now,
+			projectID: idx.projectID,
 		})
 	}
 

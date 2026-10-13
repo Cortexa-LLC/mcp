@@ -626,6 +626,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 	enc := json.NewEncoder(f)
 	for _, ent := range entities {
 		row := map[string]string{
+			"pk":         PK(ent.ProjectID, ent.ID),
 			"id":         ent.ID,
 			"name":       ent.Name,
 			"type":       ent.Type,
@@ -641,9 +642,12 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 	}
 	f.Close()
 
-	// Bulk load via COPY FROM JSON
+	// Bulk load via COPY FROM JSON. pk is the project-namespaced primary key
+	// (first column so it leads the node table's key); the selective clear
+	// already removed this project's code-derived rows, so within one project
+	// every pk in the batch is new and the load cannot collide.
 	query := fmt.Sprintf(
-		`COPY Entity(id, name, type, project_id, created_at, updated_at, visibility) FROM '%s'`,
+		`COPY Entity(pk, id, name, type, project_id, created_at, updated_at, visibility) FROM '%s'`,
 		ndjsonPath,
 	)
 	result, err := idx.store.Query(query)
@@ -653,20 +657,28 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 	}
 
 	// COPY FROM JSON not supported by this Kuzu version — fall back to
-	// individual parameterized inserts (slower but universally compatible).
+	// individual parameterized upserts (slower but universally compatible).
+	//
+	// MERGE on pk, not CREATE: pk is now project-safe, so last-write-wins on a
+	// re-indexed symbol is correct and idempotent — a second index of the same
+	// project refreshes the row instead of raising a duplicate-primary-key
+	// warning the way CREATE did.
 	fmt.Printf("Note: COPY FROM JSON unavailable (%v); falling back to row-by-row insert\n", err)
 	for _, ent := range entities {
 		r, err := idx.store.QueryParams(`
-			CREATE (e:Entity {
-				id: $id,
-				name: $name,
-				type: $type,
-				project_id: $project_id,
-				created_at: $created_at,
-				updated_at: $updated_at,
-				visibility: $visibility
-			})
+			MERGE (e:Entity {pk: $pk})
+			ON CREATE SET e.id = $id,
+			    e.name = $name,
+			    e.type = $type,
+			    e.project_id = $project_id,
+			    e.created_at = $created_at,
+			    e.updated_at = $updated_at,
+			    e.visibility = $visibility
+			ON MATCH SET e.name = $name,
+			    e.type = $type,
+			    e.updated_at = $updated_at
 		`, map[string]any{
+			"pk":         PK(ent.ProjectID, ent.ID),
 			"id":         ent.ID,
 			"name":       ent.Name,
 			"type":       ent.Type,
@@ -828,9 +840,15 @@ func (idx *Indexer) bulkLoadRelations(relType string, rels []relationRecord) err
 	if err != nil {
 		return fmt.Errorf("create ndjson: %w", err)
 	}
+	// COPY into a REL table resolves each endpoint against the node table's
+	// PRIMARY KEY, which is now pk, not id. Every relation in one index run is
+	// within idx.projectID, so both ends namespace by that project.
 	enc := json.NewEncoder(f)
 	for _, r := range rels {
-		if err := enc.Encode(map[string]string{"from": r.FromID, "to": r.ToID}); err != nil {
+		if err := enc.Encode(map[string]string{
+			"from": PK(idx.projectID, r.FromID),
+			"to":   PK(idx.projectID, r.ToID),
+		}); err != nil {
 			f.Close()
 			return fmt.Errorf("encode relation json: %w", err)
 		}
