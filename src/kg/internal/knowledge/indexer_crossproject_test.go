@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -226,5 +227,137 @@ func TestSearchObservationsDoNotBleedAcrossProjects(t *testing.T) {
 	}
 	if !checked {
 		t.Fatalf("search did not return the shared entity %q, so the bleed assertion never ran", idShared)
+	}
+}
+
+// rawInsertEntity writes an entity directly, the way an indexer bulk path does,
+// so a test can place a project-B-only neighbour with a chosen id.
+func rawInsertEntity(t *testing.T, store *Store, projectID, id, name, typ string) {
+	t.Helper()
+	r, err := store.QueryParams(`
+		CREATE (e:Entity {pk: $pk, id: $id, name: $name, type: $type, project_id: $project_id,
+		                  created_at: timestamp('2020-01-01'), updated_at: timestamp('2020-01-01')})
+	`, map[string]any{"pk": PK(projectID, id), "id": id, "name": name, "type": typ, "project_id": projectID})
+	if err != nil {
+		t.Fatalf("rawInsertEntity %s/%s: %v", projectID, id, err)
+	}
+	r.Close()
+}
+
+// rawCreateCrossEdge creates an edge between two nodes addressed by pk, with no
+// project guard — simulating exactly the future/legacy buggy write path the
+// reviewer warns about: a cross-project edge that the project-scoped reads must
+// refuse to surface or delete.
+func rawCreateCrossEdge(t *testing.T, store *Store, fromProject, fromID, toProject, toID, relType string) {
+	t.Helper()
+	r, err := store.QueryParams(fmt.Sprintf(`
+		MATCH (from:Entity {pk: $from_pk}), (to:Entity {pk: $to_pk})
+		CREATE (from)-[:%s]->(to)
+	`, relType), map[string]any{"from_pk": PK(fromProject, fromID), "to_pk": PK(toProject, toID)})
+	if err != nil {
+		t.Fatalf("rawCreateCrossEdge: %v", err)
+	}
+	r.Close()
+}
+
+// countCrossEdge returns how many relType edges run from fromProject's fromID to
+// toProject's toID, addressed by pk so it sees a cross-project edge the scoped
+// APIs hide.
+func countCrossEdge(t *testing.T, store *Store, fromProject, fromID, toProject, toID, relType string) int {
+	t.Helper()
+	r, err := store.QueryParams(fmt.Sprintf(`
+		MATCH (from:Entity {pk: $from_pk})-[e:%s]->(to:Entity {pk: $to_pk})
+		RETURN count(e)
+	`, relType), map[string]any{"from_pk": PK(fromProject, fromID), "to_pk": PK(toProject, toID)})
+	if err != nil {
+		t.Fatalf("countCrossEdge: %v", err)
+	}
+	defer r.Close()
+	if !r.HasNext() {
+		return 0
+	}
+	row, err := r.Next()
+	if err != nil {
+		t.Fatalf("countCrossEdge next: %v", err)
+	}
+	v, _ := row.GetValue(0)
+	n, _ := v.(int64)
+	return int(n)
+}
+
+// The read/delete siblings of CreateRelation (GetRelations, TraverseRelations,
+// DeleteRelation) pinned only `from` by project_id, leaving the `to`/neighbour
+// endpoint project-blind. That is masked while every edge is same-project, but a
+// single cross-project edge (constructed here directly) must not leak through a
+// project-scoped read, nor be deleted by a project-scoped delete.
+func TestRelationReadsAndDeletesAreProjectScopedOnBothEnds(t *testing.T) {
+	const projA, projB = "rel-project-a", "rel-project-b"
+
+	tmp := t.TempDir()
+	dirA := filepath.Join(tmp, "a")
+	dirB := filepath.Join(tmp, "b")
+	writeCommonProject(t, dirA)
+	writeCommonProject(t, dirB)
+
+	store, err := OpenStore(filepath.Join(tmp, "knowledge.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	indexInto(t, store, projA, dirA) // both get file:common.go and import:logging
+	indexInto(t, store, projB, dirB)
+
+	const shared = "file:common.go"
+
+	// A project-B-only neighbour, reachable only by a cross-project edge from A.
+	rawInsertEntity(t, store, projB, "topic:bneighbor", "bneighbor", "topic")
+	rawCreateCrossEdge(t, store, projA, shared, projB, "topic:bneighbor", RelRelatesTo)
+
+	// --- GetRelations: must not surface A→B.bneighbor ------------------------
+	relsA, err := store.GetRelations(shared, projA)
+	if err != nil {
+		t.Fatalf("GetRelations(A): %v", err)
+	}
+	for _, r := range relsA {
+		if r.ToID == "topic:bneighbor" {
+			t.Errorf("GetRelations(A) returned project B's neighbour %q (project-blind `to`)", r.ToID)
+		}
+	}
+
+	// --- TraverseRelations: must not cross into B ---------------------------
+	neighbours, err := store.TraverseRelations(shared, RelRelatesTo, projA)
+	if err != nil {
+		t.Fatalf("TraverseRelations(A): %v", err)
+	}
+	for _, n := range neighbours {
+		if n.ProjectID != projA {
+			t.Errorf("TraverseRelations(A) crossed into project %q via neighbour %q", n.ProjectID, n.ID)
+		}
+	}
+
+	// --- DeleteRelation: a project-A delete must not remove an edge whose far
+	// end is project B's node. Give A both a same-project edge and a cross edge
+	// to B's import:logging (same id in both projects), then delete in A. ------
+	if err := store.CreateRelation(shared, "import:logging", RelDependsOn, projA); err != nil {
+		t.Fatalf("CreateRelation A→A: %v", err)
+	}
+	rawCreateCrossEdge(t, store, projA, shared, projB, "import:logging", RelDependsOn)
+	if before := countCrossEdge(t, store, projA, shared, projB, "import:logging", RelDependsOn); before != 1 {
+		t.Fatalf("setup: expected 1 cross edge before delete, got %d", before)
+	}
+
+	if err := store.DeleteRelation(shared, "import:logging", RelDependsOn, projA); err != nil {
+		t.Fatalf("DeleteRelation(A): %v", err)
+	}
+
+	// The cross edge terminates at project B's node, so a project-A delete must
+	// leave it intact (pre-fix it was swept because `to` was project-blind).
+	if after := countCrossEdge(t, store, projA, shared, projB, "import:logging", RelDependsOn); after != 1 {
+		t.Errorf("DeleteRelation(A) touched the edge into project B's node: cross edges after = %d, want 1", after)
+	}
+	// A's own same-project edge was the intended target and should be gone.
+	if n := countCrossEdge(t, store, projA, shared, projA, "import:logging", RelDependsOn); n != 0 {
+		t.Errorf("DeleteRelation(A) did not remove A's own edge: count = %d, want 0", n)
 	}
 }
