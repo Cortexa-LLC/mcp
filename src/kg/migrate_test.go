@@ -380,7 +380,7 @@ func TestRebuildKeepsTheOldDatabase(t *testing.T) {
 	stampAs(t, dbPath, "v0.0.1-ancient")
 
 	var out bytes.Buffer
-	aside, err := archiveIfMismatch(dbPath, &out)
+	aside, err := archiveIfMismatch(dbPath, &out, nil)
 	if err != nil {
 		t.Fatalf("archiveIfMismatch: %v", err)
 	}

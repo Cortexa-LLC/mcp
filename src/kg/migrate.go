@@ -39,7 +39,12 @@ import (
 // it is archived and rebuilt here. That case is detected by a read-only open —
 // a pre-pk schema is still readable — so a current unstamped database (which has
 // pk) is never falsely archived; it simply gets stamped on the next write open.
-func archiveIfMismatch(dbPath string, out io.Writer) (string, error) {
+//
+// missingPKHint lets a caller that has already run databaseMissingPK for this
+// database pass the result in, so a `kg migrate` run does not re-derive it with a
+// second read-only open. It is nil on the standalone `kg index` path, where the
+// value is computed here on demand.
+func archiveIfMismatch(dbPath string, out io.Writer, missingPKHint *bool) (string, error) {
 	status, stamp, err := kglib.CheckFormat(dbPath)
 	if err != nil {
 		return "", err
@@ -59,12 +64,18 @@ func archiveIfMismatch(dbPath string, out io.Writer) (string, error) {
 				stamp.SchemaVersion, kglib.CurrentSchemaVersion)
 		}
 	case kglib.FormatUnstamped:
-		missing, err := databaseMissingPK(dbPath)
-		if err != nil {
-			// Cannot introspect the columns (e.g. the database will not even open
-			// read-only). Fall back to the historical leave-alone behavior rather
-			// than archiving on a guess.
-			return "", nil
+		var missing bool
+		if missingPKHint != nil {
+			missing = *missingPKHint
+		} else {
+			m, err := databaseMissingPK(dbPath)
+			if err != nil {
+				// Cannot introspect the columns (e.g. the database will not even open
+				// read-only). Fall back to the historical leave-alone behavior rather
+				// than archiving on a guess.
+				return "", nil
+			}
+			missing = m
 		}
 		if !missing {
 			// Unstamped but already current — leave it alone; the next write open
@@ -104,7 +115,7 @@ func databaseMissingPK(dbPath string) (bool, error) {
 // the personal store. Archive, create an empty replacement, replay. There is
 // nothing to index, so the ordering hazard above does not apply.
 func rebuildHandWritesOnly(dbPath string, out io.Writer) (bool, error) {
-	aside, err := archiveIfMismatch(dbPath, out)
+	aside, err := archiveIfMismatch(dbPath, out, nil)
 	if err != nil || aside == "" {
 		return false, err
 	}
@@ -192,15 +203,20 @@ every scope and the personal store in one pass, or to see what would happen.`,
 			// the same exception archiveIfMismatch makes. A current unstamped
 			// database (has pk) is still skipped.
 			needsRebuild := status == kglib.FormatMismatch
+			// missingHint carries the single databaseMissingPK result for this
+			// database into archiveIfMismatch (reached via indexScopeDB below), so
+			// the read-only open it does is not repeated there.
+			var missingHint *bool
 			if !needsRebuild && status == kglib.FormatUnstamped {
 				if missing, mErr := databaseMissingPK(dbPath); mErr == nil && missing {
 					needsRebuild = true
+					missingHint = &missing
 				}
 			}
 			if !needsRebuild {
 				continue
 			}
-			if err := indexScopeDB(root, aiDir, scope); err != nil {
+			if err := indexScopeDB(root, aiDir, scope, missingHint); err != nil {
 				failf("scope %s: rebuild failed, %s is still unreadable: %v", label, dbPath, err)
 				continue
 			}

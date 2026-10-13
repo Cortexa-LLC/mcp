@@ -121,6 +121,11 @@ func (s *Store) detectColumns() {
 		if err != nil {
 			return
 		}
+		// table_info's column name is row[1]; skip any row too short to carry it
+		// rather than indexing unconditionally.
+		if len(row) <= 1 {
+			continue
+		}
 		switch name := stringOrEmpty(row[1]); name {
 		case "visibility":
 			s.hasVisibility = true

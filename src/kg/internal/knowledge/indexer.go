@@ -676,7 +676,8 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 			    e.visibility = $visibility
 			ON MATCH SET e.name = $name,
 			    e.type = $type,
-			    e.updated_at = $updated_at
+			    e.updated_at = $updated_at,
+			    e.visibility = $visibility
 		`, map[string]any{
 			"pk":         PK(ent.ProjectID, ent.ID),
 			"id":         ent.ID,
