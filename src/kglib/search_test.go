@@ -255,7 +255,7 @@ func TestBatchGetObservations(t *testing.T) {
 	}
 
 	t.Run("returns observations for multiple entities in one call", func(t *testing.T) {
-		obsMap, err := store.batchGetObservations([]string{entity1.ID, entity2.ID}, 3)
+		obsMap, err := store.batchGetObservations([]string{entity1.ID, entity2.ID}, projectID, 3)
 		if err != nil {
 			t.Fatalf("batchGetObservations failed: %v", err)
 		}
@@ -276,7 +276,7 @@ func TestBatchGetObservations(t *testing.T) {
 	})
 
 	t.Run("empty entity list returns empty map", func(t *testing.T) {
-		obsMap, err := store.batchGetObservations([]string{}, 3)
+		obsMap, err := store.batchGetObservations([]string{}, projectID, 3)
 		if err != nil {
 			t.Fatalf("batchGetObservations with empty IDs failed: %v", err)
 		}
@@ -290,7 +290,7 @@ func TestBatchGetObservations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateEntity failed: %v", err)
 		}
-		obsMap, err := store.batchGetObservations([]string{entityEmpty.ID}, 3)
+		obsMap, err := store.batchGetObservations([]string{entityEmpty.ID}, projectID, 3)
 		if err != nil {
 			t.Fatalf("batchGetObservations failed: %v", err)
 		}
@@ -350,10 +350,10 @@ func TestVectorSearch(t *testing.T) {
 		query := make([]float32, dim)
 		query[0] = 1
 
-		if err := store.SetEmbedding(e1.ID, e1Emb); err != nil {
+		if err := store.SetEmbedding(e1.ID, pid, e1Emb); err != nil {
 			t.Fatalf("SetEmbedding failed: %v", err)
 		}
-		if err := store.SetEmbedding(e2.ID, e2Emb); err != nil {
+		if err := store.SetEmbedding(e2.ID, pid, e2Emb); err != nil {
 			t.Fatalf("SetEmbedding failed: %v", err)
 		}
 
@@ -391,7 +391,7 @@ func TestVectorSearch(t *testing.T) {
 			}
 			emb := make([]float32, dim)
 			emb[0] = float32(i) + 1
-			if err := store.SetEmbedding(e.ID, emb); err != nil {
+			if err := store.SetEmbedding(e.ID, pid, emb); err != nil {
 				t.Fatalf("SetEmbedding failed: %v", err)
 			}
 		}
@@ -754,7 +754,7 @@ func TestHNSWScalability(t *testing.T) {
 			raw[j] = float32(rng.Float64()*2 - 1)
 		}
 		emb := normF32(raw)
-		if err := store.SetEmbedding(ent.ID, emb); err != nil {
+		if err := store.SetEmbedding(ent.ID, projectID, emb); err != nil {
 			t.Fatalf("SetEmbedding[%d] failed: %v", i, err)
 		}
 	}

@@ -633,9 +633,10 @@ func TestJournalOmitsUnstableIDs(t *testing.T) {
 func mustCreateWithID(t *testing.T, store *Store, id, name, entityType, projectID string) {
 	t.Helper()
 	result, err := store.QueryParams(`
-		CREATE (e:Entity {id: $id, name: $name, type: $type, project_id: $project_id,
+		CREATE (e:Entity {pk: $pk, id: $id, name: $name, type: $type, project_id: $project_id,
 		                  created_at: $ts, updated_at: $ts})
 	`, map[string]any{
+		"pk": PK(projectID, id),
 		"id": id, "name": name, "type": entityType, "project_id": projectID,
 		"ts": time.Now().UTC(),
 	})

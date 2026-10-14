@@ -45,7 +45,7 @@ Examples:
 		// Index each scope
 		totalStart := time.Now()
 		for _, scopeName := range scopes {
-			if err := indexScopeDB(root, aiDir, scopeName); err != nil {
+			if err := indexScopeDB(root, aiDir, scopeName, nil); err != nil {
 				return fmt.Errorf("index scope %s: %w", scopeName, err)
 			}
 		}
@@ -100,7 +100,10 @@ func determineScopesToIndex(aiDir, requestedScope string, all bool) ([]string, e
 	return names, nil
 }
 
-func indexScopeDB(root, aiDir, scopeName string) error {
+// missingPKHint is forwarded to archiveIfMismatch: the `kg migrate` caller has
+// already computed databaseMissingPK for this database and passes it in to avoid
+// a second read-only open; the standalone `kg index` caller passes nil.
+func indexScopeDB(root, aiDir, scopeName string, missingPKHint *bool) error {
 	var dbPath string
 	var scopeConfig *knowledge.ScopeConfig
 
@@ -121,7 +124,7 @@ func indexScopeDB(root, aiDir, scopeName string) error {
 	// all, so the check has to happen before the open, not in response to its
 	// error. Indexing is exactly the operation that repairs one: the derived
 	// content is about to be regenerated from the tree anyway.
-	aside, err := archiveIfMismatch(dbPath, os.Stdout)
+	aside, err := archiveIfMismatch(dbPath, os.Stdout, missingPKHint)
 	if err != nil {
 		return fmt.Errorf("rebuild %s: %w", dbPath, err)
 	}

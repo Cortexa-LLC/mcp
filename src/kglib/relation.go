@@ -24,15 +24,21 @@ func (s *Store) CreateRelation(fromID, toID, relType, projectID string) error {
 
 	// relType is a relationship label (not a value) and cannot be parameterised
 	// in Cypher. It is validated against AllowedRelTypes above before use.
+	//
+	// Endpoints are matched on pk, never on bare id. A bare-id MATCH is
+	// project-blind: with two projects in one database it can bind an endpoint to
+	// an identically-id'd node in the OTHER project, wiring the edge to the wrong
+	// graph. pk namespaces id by project, so this both targets this project's
+	// nodes and uses the indexed primary key.
 	query := fmt.Sprintf(`
 		MATCH (from:Entity), (to:Entity)
-		WHERE from.id = $from_id AND to.id = $to_id
+		WHERE from.pk = $from_pk AND to.pk = $to_pk
 		CREATE (from)-[:%s]->(to)
 	`, relType)
 
 	result, err := s.QueryParams(query, map[string]any{
-		"from_id": fromID,
-		"to_id":   toID,
+		"from_pk": PK(projectID, fromID),
+		"to_pk":   PK(projectID, toID),
 	})
 	if err != nil {
 		return fmt.Errorf("create relation: %w", err)
@@ -60,9 +66,17 @@ func (s *Store) GetRelations(entityID, projectID string) ([]*Relation, error) {
 		return nil, err
 	}
 
+	// Both endpoints are pinned to this project, not just `from`. An edge whose
+	// far end belongs to another project (only possible from a legacy
+	// cross-project edge predating the pk fix) must not be returned with a
+	// neighbour this project cannot see — the same project-blind-endpoint bug
+	// CreateRelation was fixed for. project_id is used rather than pk because the
+	// surrounding match already keys `from` by id+project_id and that pattern is
+	// legacy-safe; the returned id stays the local display id.
 	result, err := s.QueryParams(`
 		MATCH (from:Entity)-[r]->(to:Entity)
 		WHERE from.id = $entity_id AND from.project_id = $project_id
+		  AND to.project_id = $project_id
 		RETURN from.id, to.id, label(r)
 	`, map[string]any{"entity_id": entityID, "project_id": projectID})
 	if err != nil {
@@ -113,9 +127,12 @@ func (s *Store) DeleteRelation(fromID, toID, relType, projectID string) error {
 	}
 
 	// relType is a relationship label validated against AllowedRelTypes above.
+	// Both endpoints are pinned to this project so a project-A delete can never
+	// reach into project B's identically-id'd edge (see GetRelations).
 	query := fmt.Sprintf(`
 		MATCH (from:Entity)-[r:%s]->(to:Entity)
-		WHERE from.id = $from_id AND to.id = $to_id AND from.project_id = $project_id
+		WHERE from.id = $from_id AND to.id = $to_id
+		  AND from.project_id = $project_id AND to.project_id = $project_id
 		DELETE r
 	`, relType)
 
@@ -155,9 +172,12 @@ func (s *Store) TraverseRelations(entityID, relType, projectID string) ([]*Entit
 	}
 
 	// relType is a relationship label validated against AllowedRelTypes above.
+	// The neighbour is pinned to this project so a traversal cannot cross into
+	// another project's graph via a shared entity id (see GetRelations).
 	query := fmt.Sprintf(`
 		MATCH (from:Entity)-[:%s]->(to:Entity)
 		WHERE from.id = $entity_id AND from.project_id = $project_id
+		  AND to.project_id = $project_id
 		RETURN to.id, to.name, to.type, to.project_id, to.created_at, to.updated_at
 	`, relType)
 

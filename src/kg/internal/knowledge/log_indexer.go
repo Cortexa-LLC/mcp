@@ -189,6 +189,11 @@ type obsRecord struct {
 	entityID string
 	content  string
 	created  time.Time
+	// projectID namespaces both the observation's own pk and the pk of the
+	// parent entity the HAS_OBSERVATION edge resolves against (see
+	// bulkLoadExecObservations). Every observation in one run shares it, but it
+	// is carried per-row to keep the bulk loader free of an out-of-band argument.
+	projectID string
 }
 
 // LogIndexStats holds counters returned by IndexExecutionLogs.
@@ -263,10 +268,11 @@ func IndexExecutionLogs(store *Store, projectID, projectRoot string) (LogIndexSt
 		})
 		for _, o := range buildExecObservations(parsed, meta, folderName) {
 			newObs = append(newObs, obsRecord{
-				id:       uuid.New().String(),
-				entityID: entityID,
-				content:  o,
-				created:  now,
+				id:        uuid.New().String(),
+				entityID:  entityID,
+				content:   o,
+				created:   now,
+				projectID: projectID,
 			})
 		}
 	}
@@ -308,6 +314,7 @@ func bulkLoadExecEntities(store *Store, entities []entityRecord) error {
 	enc := json.NewEncoder(f)
 	for _, e := range entities {
 		if err := enc.Encode(map[string]string{
+			"pk":         PK(e.ProjectID, e.ID),
 			"id":         e.ID,
 			"name":       e.Name,
 			"type":       e.Type,
@@ -322,17 +329,24 @@ func bulkLoadExecEntities(store *Store, entities []entityRecord) error {
 	f.Close()
 
 	result, err := store.Query(fmt.Sprintf(
-		`COPY Entity(id, name, type, project_id, created_at, updated_at) FROM '%s'`, path,
+		`COPY Entity(pk, id, name, type, project_id, created_at, updated_at) FROM '%s'`, path,
 	))
 	if err != nil {
-		// Fall back to row-by-row if COPY FROM JSON is unavailable.
+		// Fall back to row-by-row MERGE (idempotent on pk) if COPY FROM JSON is
+		// unavailable. These entities were already filtered for prior existence
+		// by name, so MERGE only refreshes a genuine re-run rather than colliding.
 		for _, e := range entities {
+			// No visibility here is intentional: exec-log entities carry no
+			// visibility attribute today, unlike code-indexer entities. This is
+			// not a second instance of the ON CREATE/ON MATCH gap fixed in
+			// indexer.go — there is nothing to set.
 			r, err2 := store.QueryParams(`
-				CREATE (n:Entity {
-					id: $id, name: $name, type: $type,
-					project_id: $project_id,
-					created_at: $created_at, updated_at: $updated_at
-				})`, map[string]any{
+				MERGE (n:Entity {pk: $pk})
+				ON CREATE SET n.id = $id, n.name = $name, n.type = $type,
+				    n.project_id = $project_id,
+				    n.created_at = $created_at, n.updated_at = $updated_at
+				ON MATCH SET n.name = $name, n.type = $type, n.updated_at = $updated_at`, map[string]any{
+				"pk": PK(e.ProjectID, e.ID),
 				"id": e.ID, "name": e.Name, "type": e.Type,
 				"project_id": e.ProjectID,
 				"created_at": e.CreatedAt, "updated_at": e.UpdatedAt,
@@ -366,6 +380,7 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 	eenc := json.NewEncoder(ef)
 	for _, o := range obs {
 		if err := nenc.Encode(map[string]string{
+			"pk":         PK(o.projectID, o.id),
 			"id":         o.id,
 			"entity_id":  o.entityID,
 			"content":    o.content,
@@ -375,9 +390,12 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 			ef.Close()
 			return err
 		}
+		// Both endpoints of HAS_OBSERVATION resolve against node primary keys,
+		// which are now pk: the parent Entity's pk and this Observation's pk,
+		// both namespaced by the observation's project.
 		if err := eenc.Encode(map[string]string{
-			"from": o.entityID,
-			"to":   o.id,
+			"from": PK(o.projectID, o.entityID),
+			"to":   PK(o.projectID, o.id),
 		}); err != nil {
 			nf.Close()
 			ef.Close()
@@ -388,7 +406,7 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 	ef.Close()
 
 	r, err := store.Query(fmt.Sprintf(
-		`COPY Observation(id, entity_id, content, created_at) FROM '%s'`, nodesPath,
+		`COPY Observation(pk, id, entity_id, content, created_at) FROM '%s'`, nodesPath,
 	))
 	if err != nil {
 		return fmt.Errorf("COPY Observation: %w", err)

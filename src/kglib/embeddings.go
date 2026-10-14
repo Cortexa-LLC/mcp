@@ -36,9 +36,11 @@ func (s *Store) BatchEmbed(ctx context.Context, projectID string, embedder Embed
 				"results are matched by position, so a mismatched count cannot be used", len(embeddings), len(texts))
 		}
 
-		// Store embeddings
+		// Store embeddings. entity.ProjectID equals the projectID being embedded
+		// (GetUnembeddedEntities filters on it); passing it keeps SetEmbedding on
+		// this project's node and invalidates this project's index.
 		for i, entity := range entities {
-			if err := s.SetEmbedding(entity.ID, embeddings[i]); err != nil {
+			if err := s.SetEmbedding(entity.ID, entity.ProjectID, embeddings[i]); err != nil {
 				return fmt.Errorf("set embedding for entity %s: %w", entity.ID, err)
 			}
 		}
@@ -70,9 +72,11 @@ func (s *Store) BatchEmbed(ctx context.Context, projectID string, embedder Embed
 			"results are matched by position, so a mismatched count cannot be used", len(obsEmbeddings), len(obsTexts))
 	}
 
-	// Store observation embeddings
+	// Store observation embeddings. projectID is the project BatchEmbed is
+	// embedding (GetUnembeddedObservations filtered on it), so it scopes the
+	// write to this project's observation rows.
 	for i, obs := range observations {
-		if err := s.SetObservationEmbedding(obs.ID, obsEmbeddings[i]); err != nil {
+		if err := s.SetObservationEmbedding(obs.ID, projectID, obsEmbeddings[i]); err != nil {
 			return fmt.Errorf("set embedding for observation %s: %w", obs.ID, err)
 		}
 	}
@@ -156,17 +160,17 @@ func (s *Store) GetUnembeddedObservations(projectID string) ([]Observation, erro
 // SetEmbedding stores an embedding vector for an entity and invalidates the
 // in-memory HNSW index for the entity's project so that the next VectorSearch
 // call rebuilds the index with the new vector.
-func (s *Store) SetEmbedding(entityID string, embedding []float32) error {
-	// Look up the project_id so we can invalidate the correct HNSW index.
-	projectID, err := s.entityProjectID(entityID)
-	if err != nil {
-		return fmt.Errorf("set embedding (lookup project): %w", err)
-	}
-
+//
+// The entity is matched by its project-namespaced pk, not by id alone: under
+// multi-project-per-DB a bare-id MATCH would set the embedding on every
+// project's node sharing that id (and the old project_id lookup returned an
+// arbitrary one of them, invalidating the wrong project's HNSW index). projectID
+// is required and is the project whose index is invalidated.
+func (s *Store) SetEmbedding(entityID, projectID string, embedding []float32) error {
 	result, err := s.QueryParams(`
-		MATCH (e:Entity {id: $id})
+		MATCH (e:Entity {pk: $pk})
 		SET e.embedding = $embedding
-	`, map[string]any{"id": entityID, "embedding": embedding})
+	`, map[string]any{"pk": PK(projectID, entityID), "embedding": embedding})
 	if err != nil {
 		return fmt.Errorf("set embedding: %w", err)
 	}
@@ -180,43 +184,19 @@ func (s *Store) SetEmbedding(entityID string, embedding []float32) error {
 	return nil
 }
 
-// entityProjectID returns the project_id for entityID, or "" if not found.
-func (s *Store) entityProjectID(entityID string) (string, error) {
+// SetObservationEmbedding stores an embedding vector for an observation.
+//
+// Matched by the project-namespaced pk, consistent with SetEmbedding and every
+// other write: an observation id is a UUID so a cross-project collision is
+// unlikely, but a bare-id match is the same project-blind pattern this change
+// removes elsewhere, and there is no reason to leave one write path on it. No
+// !hasPK fallback is needed — writes only happen on a read-write open, which
+// refuses a pre-pk database outright (see openStoreWithConfig).
+func (s *Store) SetObservationEmbedding(observationID, projectID string, embedding []float32) error {
 	result, err := s.QueryParams(`
-		MATCH (e:Entity {id: $id})
-		RETURN e.project_id
-	`, map[string]any{"id": entityID})
-	if err != nil {
-		return "", fmt.Errorf("query entity project_id: %w", err)
-	}
-	defer result.Close()
-
-	if result.HasNext() {
-		tuple, err := result.Next()
-		if err != nil {
-			return "", fmt.Errorf("next: %w", err)
-		}
-		row, err := tuple.GetAsSlice()
-		tuple.Close()
-		if err != nil {
-			return "", fmt.Errorf("get slice: %w", err)
-		}
-		if row[0] == nil {
-			return "", nil
-		}
-		if pid, ok := row[0].(string); ok {
-			return pid, nil
-		}
-	}
-	return "", nil
-}
-
-// SetObservationEmbedding stores an embedding vector for an observation
-func (s *Store) SetObservationEmbedding(observationID string, embedding []float32) error {
-	result, err := s.QueryParams(`
-		MATCH (o:Observation {id: $id})
+		MATCH (o:Observation {pk: $pk})
 		SET o.embedding = $embedding
-	`, map[string]any{"id": observationID, "embedding": embedding})
+	`, map[string]any{"pk": PK(projectID, observationID), "embedding": embedding})
 	if err != nil {
 		return fmt.Errorf("set observation embedding: %w", err)
 	}

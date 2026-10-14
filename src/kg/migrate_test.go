@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,67 @@ import (
 
 	"github.com/cortexa-llc/mcp/kg/internal/knowledge"
 	"github.com/cortexa-llc/mcp/kglib"
+	kuzu "github.com/kuzudb/go-kuzu"
 )
+
+// writePrePKDatabase builds a database with the pre-pk schema (Entity/Observation
+// keyed on the global id, no pk column) and no format stamp, and drops a journal
+// beside it carrying one hand-written entity. This is the legacy artifact the
+// migration must still rescue: unstamped AND predating the pk column.
+func writePrePKDatabase(t *testing.T, dbPath, projectID string, hand kglib.EntityRef) {
+	t.Helper()
+
+	db, err := kuzu.OpenDatabase(dbPath, kuzu.DefaultSystemConfig())
+	if err != nil {
+		t.Fatalf("OpenDatabase: %v", err)
+	}
+	conn, err := kuzu.OpenConnection(db)
+	if err != nil {
+		db.Close()
+		t.Fatalf("OpenConnection: %v", err)
+	}
+
+	ddl := []string{
+		`CREATE NODE TABLE Entity(id STRING PRIMARY KEY, name STRING, type STRING,
+			project_id STRING, created_at TIMESTAMP, updated_at TIMESTAMP,
+			embedding FLOAT[1536], visibility STRING)`,
+		`CREATE NODE TABLE Observation(id STRING PRIMARY KEY, entity_id STRING,
+			content STRING, created_at TIMESTAMP, embedding FLOAT[1536])`,
+		`CREATE REL TABLE HAS_OBSERVATION(FROM Entity TO Observation)`,
+		`CREATE NODE TABLE KGMeta(project_id STRING PRIMARY KEY, repo_url STRING,
+			commit_hash STRING, dirty BOOLEAN, indexed_at TIMESTAMP,
+			embed_model STRING, kg_version STRING)`,
+	}
+	for _, rt := range knowledge.AllowedRelTypes {
+		ddl = append(ddl, fmt.Sprintf("CREATE REL TABLE %s(FROM Entity TO Entity)", rt))
+	}
+	for _, stmt := range ddl {
+		res, err := conn.Query(stmt)
+		if err != nil {
+			conn.Close()
+			db.Close()
+			t.Fatalf("pre-pk DDL %q: %v", stmt, err)
+		}
+		res.Close()
+	}
+	conn.Close()
+	db.Close()
+
+	// The journal is the only copy of the hand-write across a rebuild.
+	rec := kglib.JournalRecord{
+		Version:   kglib.JournalVersion,
+		Op:        kglib.OpCreateEntity,
+		ProjectID: projectID,
+		Entity:    &hand,
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal journal record: %v", err)
+	}
+	if err := os.WriteFile(kglib.JournalPath(dbPath), append(data, '\n'), 0600); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+}
 
 // stampAs rewrites a database's format sidecar to claim a different engine
 // build wrote it, which is how a future go-kuzu bump is simulated without one.
@@ -25,7 +86,170 @@ func stampAs(t *testing.T, dbPath, kuzuVersion string) {
 	}
 }
 
+// stampSchema rewrites the sidecar to claim an older kg schema version while
+// keeping this build's Kuzu version — the way an on-disk schema bump (e.g. the
+// pk primary key) presents on a database written by an otherwise-current build.
+func stampSchema(t *testing.T, dbPath string, schemaVersion int) {
+	t.Helper()
+	data, err := json.Marshal(kglib.FormatStamp{
+		KuzuVersion:   kglib.KuzuVersion(),
+		KGVersion:     "test",
+		SchemaVersion: schemaVersion,
+	})
+	if err != nil {
+		t.Fatalf("marshal stamp: %v", err)
+	}
+	if err := os.WriteFile(kglib.FormatStampPath(dbPath), data, 0600); err != nil {
+		t.Fatalf("write stamp: %v", err)
+	}
+}
+
+// A kg schema-version bump (not a Kuzu bump) must also trigger archive + rebuild
+// and carry hand-written knowledge across via journal replay. This is the
+// migration path the pk primary key rides: Kuzu cannot ALTER … ADD PRIMARY KEY,
+// so an older-schema database is rebuilt fresh and its journal replayed.
+func TestSchemaVersionBumpRebuildsAndRestoresHandWrites(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "knowledge.db")
+
+	store, err := knowledge.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	store.EnableJournal()
+	entity, err := store.CreateEntity("retry-policy", "decision", "proj")
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if _, err := store.CreateObservation(entity.ID, "three attempts, exponential backoff", "proj"); err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+	store.Close()
+
+	// Same Kuzu build, but an older schema than this build writes.
+	stampSchema(t, dbPath, kglib.CurrentSchemaVersion-1)
+
+	status, _, err := kglib.CheckFormat(dbPath)
+	if err != nil {
+		t.Fatalf("CheckFormat: %v", err)
+	}
+	if status != kglib.FormatMismatch {
+		t.Fatalf("an older schema_version was not reported as a mismatch: got %v", status)
+	}
+
+	var out bytes.Buffer
+	rebuilt, err := rebuildHandWritesOnly(dbPath, &out)
+	if err != nil {
+		t.Fatalf("rebuildHandWritesOnly: %v", err)
+	}
+	if !rebuilt {
+		t.Fatal("a database with an older kg schema was not rebuilt")
+	}
+
+	fresh, err := knowledge.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open rebuilt store: %v", err)
+	}
+	defer fresh.Close()
+
+	restored, err := fresh.GetEntityByNameAndType("retry-policy", "decision", "proj")
+	if err != nil {
+		t.Fatalf("GetEntityByNameAndType: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("hand-written entity did not survive the schema rebuild")
+	}
+	observations, err := fresh.GetObservations(restored.ID, "proj")
+	if err != nil {
+		t.Fatalf("GetObservations: %v", err)
+	}
+	if len(observations) != 1 || observations[0].Content != "three attempts, exponential backoff" {
+		t.Errorf("observations = %+v, want the hand-written note", observations)
+	}
+
+	// The rebuilt database is stamped at the current schema, so it is FormatOK.
+	status, _, err = kglib.CheckFormat(dbPath)
+	if err != nil {
+		t.Fatalf("CheckFormat after rebuild: %v", err)
+	}
+	if status != kglib.FormatOK {
+		t.Errorf("status after rebuild = %v, want %v", status, kglib.FormatOK)
+	}
+}
+
 // The whole point of Phase 4, end to end: hand-written knowledge survives a
+// A database that is unstamped AND predates the pk column has no other recovery
+// path: a read-write open refuses it (the pk gate), `kg migrate`'s loop used to
+// skip anything that was not a stamped mismatch, and `kg index` hit the same
+// gate — a dead end. archiveIfMismatch must now treat that specific case as a
+// mismatch, archive it, and replay the journal into the rebuilt database.
+func TestUnstampedPrePKDatabaseRebuildsAndRestoresHandWrites(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "knowledge.db")
+	writePrePKDatabase(t, dbPath, "proj", kglib.EntityRef{Name: "retry-policy", Type: "decision"})
+
+	// Preconditions: no stamp (unstamped) and no pk column (pre-pk).
+	status, _, err := kglib.CheckFormat(dbPath)
+	if err != nil {
+		t.Fatalf("CheckFormat: %v", err)
+	}
+	if status != kglib.FormatUnstamped {
+		t.Fatalf("fixture is not unstamped: got %v", status)
+	}
+	missing, err := databaseMissingPK(dbPath)
+	if err != nil {
+		t.Fatalf("databaseMissingPK: %v", err)
+	}
+	if !missing {
+		t.Fatal("fixture unexpectedly already has the pk column")
+	}
+
+	// Pre-fix this returns (false, nil) — archiveIfMismatch did nothing for an
+	// unstamped database, leaving the dead end. Post-fix it archives + rebuilds.
+	var out bytes.Buffer
+	rebuilt, err := rebuildHandWritesOnly(dbPath, &out)
+	if err != nil {
+		t.Fatalf("rebuildHandWritesOnly: %v", err)
+	}
+	if !rebuilt {
+		t.Fatal("an unstamped pre-pk database was not rebuilt (the dead-end path)")
+	}
+
+	// The old database is archived, not deleted.
+	matches, err := filepath.Glob(dbPath + ".old-*")
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Error("no archived copy of the pre-pk database")
+	}
+
+	// The rebuilt database has the pk column and the journal's hand-write.
+	fresh, err := knowledge.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open rebuilt store: %v", err)
+	}
+	defer fresh.Close()
+	if !fresh.HasPK() {
+		t.Error("rebuilt database still lacks the pk column")
+	}
+	restored, err := fresh.GetEntityByNameAndType("retry-policy", "decision", "proj")
+	if err != nil {
+		t.Fatalf("GetEntityByNameAndType: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("hand-written entity did not replay from the journal into the rebuild")
+	}
+
+	// And the rebuilt database is now stamped and current, so it is not rebuilt
+	// again on the next run.
+	status, _, err = kglib.CheckFormat(dbPath)
+	if err != nil {
+		t.Fatalf("CheckFormat after rebuild: %v", err)
+	}
+	if status != kglib.FormatOK {
+		t.Errorf("status after rebuild = %v, want %v", status, kglib.FormatOK)
+	}
+}
+
 // storage-format change with no old binary involved and no user action.
 func TestEnsureFormatRebuildsAndRestoresHandWrites(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "knowledge.db")
@@ -156,7 +380,7 @@ func TestRebuildKeepsTheOldDatabase(t *testing.T) {
 	stampAs(t, dbPath, "v0.0.1-ancient")
 
 	var out bytes.Buffer
-	aside, err := archiveIfMismatch(dbPath, &out)
+	aside, err := archiveIfMismatch(dbPath, &out, nil)
 	if err != nil {
 		t.Fatalf("archiveIfMismatch: %v", err)
 	}

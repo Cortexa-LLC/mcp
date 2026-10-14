@@ -40,9 +40,15 @@ func (s *Store) initSchema(cfg *SchemaConfig) error {
 
 	// Fixed node tables and the HAS_OBSERVATION edge
 	staticStatements := []string{
-		// Entity node table
+		// Entity node table.
+		//
+		// pk is the project-namespaced primary key (see pk.go); id stays the
+		// human-facing/journal-stable value ("file:…", a UUID, …) and is a plain
+		// indexed-by-nothing attribute. Kuzu allows only one PRIMARY KEY column,
+		// so the composite (project_id, id) key is carried by pk instead.
 		`CREATE NODE TABLE IF NOT EXISTS Entity(
-			id STRING PRIMARY KEY,
+			pk STRING PRIMARY KEY,
+			id STRING,
 			name STRING,
 			type STRING,
 			project_id STRING,
@@ -52,9 +58,11 @@ func (s *Store) initSchema(cfg *SchemaConfig) error {
 			visibility STRING
 		)`,
 
-		// Observation node table
+		// Observation node table. pk namespaces id by project_id exactly as on
+		// Entity; id stays the UUID the rest of the code and the journal use.
 		`CREATE NODE TABLE IF NOT EXISTS Observation(
-			id STRING PRIMARY KEY,
+			pk STRING PRIMARY KEY,
+			id STRING,
 			entity_id STRING,
 			content STRING,
 			created_at TIMESTAMP,

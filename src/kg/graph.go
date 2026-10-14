@@ -302,7 +302,7 @@ func runFederatedGraph(cmd *cobra.Command, s graphSettings, out io.Writer) (know
 	graph, report, err := knowledge.LoadFederatedGraph(knowledge.FederatedGraphOptions{
 		AIDir:         aiDir,
 		Scope:         scope,
-		ProjectID:     filepath.Base(root),
+		ProjectID:     projectIDFromCwd(root),
 		OnlyLayers:    graphLayers,
 		MaxJoinLayers: graphMaxJoin,
 		JoinTypes:     parseJoinTypes(cmd),

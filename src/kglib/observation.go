@@ -31,8 +31,9 @@ func (s *Store) CreateObservation(entityID, content, projectID string) (*Observa
 	// statement there is no risk of an orphaned Observation node if the edge
 	// creation were to fail.
 	result, err := s.QueryParams(`
-		MATCH (e:Entity {id: $entity_id, project_id: $project_id})
+		MATCH (e:Entity {pk: $entity_pk})
 		CREATE (o:Observation {
+			pk: $pk,
 			id: $id,
 			entity_id: $entity_id,
 			content: $content,
@@ -40,8 +41,9 @@ func (s *Store) CreateObservation(entityID, content, projectID string) (*Observa
 		})
 		CREATE (e)-[:HAS_OBSERVATION]->(o)
 	`, map[string]any{
+		"entity_pk":  PK(projectID, entityID),
 		"entity_id":  entityID,
-		"project_id": projectID,
+		"pk":         PK(projectID, obs.ID),
 		"id":         obs.ID,
 		"content":    content,
 		"created_at": obs.CreatedAt,

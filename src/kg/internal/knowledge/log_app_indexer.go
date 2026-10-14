@@ -190,10 +190,11 @@ func IndexApplicationLogs(store *Store, projectID, projectRoot string, scopeFilt
 			obs := buildLogEntityObservations(logEntity, relPath)
 			for _, content := range obs {
 				newObs = append(newObs, obsRecord{
-					id:       uuid.New().String(),
-					entityID: entityID,
-					content:  content,
-					created:  now,
+					id:        uuid.New().String(),
+					entityID:  entityID,
+					content:   content,
+					created:   now,
+					projectID: projectID,
 				})
 			}
 		}
