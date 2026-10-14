@@ -269,8 +269,8 @@ func seedEntityWithID(t *testing.T, aiDir, layer, id, name, entityType string) {
 	defer store.Close()
 
 	result, err := store.QueryParams(`
-		CREATE (e:Entity {id: $id, name: $name, type: $type, project_id: $project_id})
-	`, map[string]any{"id": id, "name": name, "type": entityType, "project_id": fedProject})
+		CREATE (e:Entity {pk: $pk, id: $id, name: $name, type: $type, project_id: $project_id})
+	`, map[string]any{"pk": PK(fedProject, id), "id": id, "name": name, "type": entityType, "project_id": fedProject})
 	if err != nil {
 		t.Fatalf("seed entity %s in %s: %v", id, layer, err)
 	}

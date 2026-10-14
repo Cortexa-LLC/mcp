@@ -25,25 +25,69 @@ import (
 // this code — replay reads the journal, not the database — but a rebuild that
 // turns out worse than what it replaced should be recoverable.
 
-// archiveIfMismatch moves a database aside when this build cannot read its
-// storage format, returning the path it was archived to (empty when nothing was
-// done). The check happens before any open, because a database in the wrong
-// format cannot be opened to be asked about itself.
+// archiveIfMismatch moves a database aside when this build cannot read or use
+// its on-disk shape, returning the path it was archived to (empty when nothing
+// was done). The stamp check happens before any open, because a database in the
+// wrong storage format cannot be opened to be asked about itself.
 //
-// An unstamped database — one written before stamping shipped — is left alone.
-// There is no evidence against it, and rebuilding every pre-existing graph on
-// first run would be precisely the forced breakage this exists to avoid.
-func archiveIfMismatch(dbPath string, out io.Writer) (string, error) {
+// An unstamped database — one written before stamping shipped — is normally left
+// alone: there is no evidence against it, and rebuilding every pre-existing
+// graph on first run would be the forced breakage this exists to avoid. The one
+// exception is an unstamped database that ALSO predates the pk column: it cannot
+// be opened read-write (the pk gate in OpenStore hard-errors) and neither `kg
+// index` nor `kg migrate` would otherwise repair it, so it is a dead end unless
+// it is archived and rebuilt here. That case is detected by a read-only open —
+// a pre-pk schema is still readable — so a current unstamped database (which has
+// pk) is never falsely archived; it simply gets stamped on the next write open.
+//
+// missingPKHint lets a caller that has already run databaseMissingPK for this
+// database pass the result in, so a `kg migrate` run does not re-derive it with a
+// second read-only open. It is nil on the standalone `kg index` path, where the
+// value is computed here on demand.
+func archiveIfMismatch(dbPath string, out io.Writer, missingPKHint *bool) (string, error) {
 	status, stamp, err := kglib.CheckFormat(dbPath)
 	if err != nil {
 		return "", err
 	}
-	if status != kglib.FormatMismatch {
+
+	var reason string
+	switch status {
+	case kglib.FormatMismatch:
+		// A mismatch is either a storage-format (Kuzu) bump or a kg schema bump;
+		// the message names whichever actually differs so a same-Kuzu schema
+		// change does not print the confusing "written by kuzu X; this build uses X".
+		if stamp.KuzuVersion != kglib.KuzuVersion() {
+			reason = fmt.Sprintf("was written by kuzu %s; this build uses %s",
+				stamp.KuzuVersion, kglib.KuzuVersion())
+		} else {
+			reason = fmt.Sprintf("uses kg schema v%d; this build needs v%d",
+				stamp.SchemaVersion, kglib.CurrentSchemaVersion)
+		}
+	case kglib.FormatUnstamped:
+		var missing bool
+		if missingPKHint != nil {
+			missing = *missingPKHint
+		} else {
+			m, err := databaseMissingPK(dbPath)
+			if err != nil {
+				// Cannot introspect the columns (e.g. the database will not even open
+				// read-only). Fall back to the historical leave-alone behavior rather
+				// than archiving on a guess.
+				return "", nil
+			}
+			missing = m
+		}
+		if !missing {
+			// Unstamped but already current — leave it alone; the next write open
+			// stamps it.
+			return "", nil
+		}
+		reason = "is unstamped and predates the project-namespaced primary key"
+	default:
 		return "", nil
 	}
 
-	fmt.Fprintf(out, "🔄 %s was written by kuzu %s; this build uses %s. Rebuilding.\n",
-		dbPath, stamp.KuzuVersion, kglib.KuzuVersion())
+	fmt.Fprintf(out, "🔄 %s %s. Rebuilding.\n", dbPath, reason)
 
 	aside, err := kglib.ArchiveDatabase(dbPath)
 	if err != nil {
@@ -53,11 +97,25 @@ func archiveIfMismatch(dbPath string, out io.Writer) (string, error) {
 	return aside, nil
 }
 
+// databaseMissingPK reports whether an existing database lacks the pk column,
+// i.e. predates the project-namespaced primary key. It opens the database
+// read-only purely to introspect its columns — a pre-pk schema is still readable,
+// and a read-only open neither migrates the schema nor trips the write-open pk
+// gate, so this is a safe question to ask of any database.
+func databaseMissingPK(dbPath string) (bool, error) {
+	store, err := knowledge.OpenStoreReadOnly(dbPath)
+	if err != nil {
+		return false, err
+	}
+	defer store.Close()
+	return !store.HasPK(), nil
+}
+
 // rebuildHandWritesOnly repairs a database that has no source tree behind it —
 // the personal store. Archive, create an empty replacement, replay. There is
 // nothing to index, so the ordering hazard above does not apply.
 func rebuildHandWritesOnly(dbPath string, out io.Writer) (bool, error) {
-	aside, err := archiveIfMismatch(dbPath, out)
+	aside, err := archiveIfMismatch(dbPath, out, nil)
 	if err != nil || aside == "" {
 		return false, err
 	}
@@ -139,10 +197,36 @@ every scope and the personal store in one pass, or to see what would happen.`,
 			// Counted only once the format is actually known: "checked" is a
 			// claim about evidence, not about how many paths were visited.
 			checked++
-			if status != kglib.FormatMismatch {
+			// A stamped mismatch always rebuilds. An unstamped database is left
+			// alone UNLESS it also predates the pk column, which is a dead end
+			// (write-open refuses it) that only an archive+rebuild can repair —
+			// the same exception archiveIfMismatch makes. A current unstamped
+			// database (has pk) is still skipped.
+			needsRebuild := status == kglib.FormatMismatch
+			// missingHint carries the single databaseMissingPK result for this
+			// database into archiveIfMismatch (reached via indexScopeDB below), so
+			// the read-only open it does is not repeated there.
+			var missingHint *bool
+			if !needsRebuild && status == kglib.FormatUnstamped {
+				missing, mErr := databaseMissingPK(dbPath)
+				if mErr != nil {
+					// Mirror the CheckFormat-error path above: an introspection we
+					// could not complete is not evidence that this build can read
+					// the database, so it must count as unchecked (failf) rather
+					// than fall through with needsRebuild=false and reach the
+					// all-clear summary for a database we never resolved.
+					failf("scope %s: cannot determine whether %s predates the primary key: %v", label, dbPath, mErr)
+					continue
+				}
+				if missing {
+					needsRebuild = true
+					missingHint = &missing
+				}
+			}
+			if !needsRebuild {
 				continue
 			}
-			if err := indexScopeDB(root, aiDir, scope); err != nil {
+			if err := indexScopeDB(root, aiDir, scope, missingHint); err != nil {
 				failf("scope %s: rebuild failed, %s is still unreadable: %v", label, dbPath, err)
 				continue
 			}

@@ -53,10 +53,11 @@ func (s *Store) createEntityWithID(id, name, entityType, projectID string) (*Ent
 
 	result, err := s.QueryParams(`
 		CREATE (e:Entity {
-			id: $id, name: $name, type: $type, project_id: $project_id,
+			pk: $pk, id: $id, name: $name, type: $type, project_id: $project_id,
 			created_at: $created_at, updated_at: $updated_at
 		})
 	`, map[string]any{
+		"pk": PK(projectID, id),
 		"id": id, "name": name, "type": entityType, "project_id": projectID,
 		"created_at": entity.CreatedAt, "updated_at": entity.UpdatedAt,
 	})
@@ -120,9 +121,16 @@ func (s *Store) detectColumns() {
 		if err != nil {
 			return
 		}
-		if len(row) > 1 && stringOrEmpty(row[1]) == "visibility" {
+		// table_info's column name is row[1]; skip any row too short to carry it
+		// rather than indexing unconditionally.
+		if len(row) <= 1 {
+			continue
+		}
+		switch name := stringOrEmpty(row[1]); name {
+		case "visibility":
 			s.hasVisibility = true
-			return
+		case "pk":
+			s.hasPK = true
 		}
 	}
 }
@@ -157,6 +165,7 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 
 	result, err := s.QueryParams(`
 		CREATE (e:Entity {
+			pk: $pk,
 			id: $id,
 			name: $name,
 			type: $type,
@@ -165,6 +174,7 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 			updated_at: $updated_at
 		})
 	`, map[string]any{
+		"pk":         PK(projectID, entity.ID),
 		"id":         entity.ID,
 		"name":       name,
 		"type":       entityType,
@@ -188,13 +198,30 @@ func (s *Store) CreateEntity(name, entityType, projectID string) (*Entity, error
 	return entity, nil
 }
 
-// GetEntity retrieves an entity by ID for a specific project
+// GetEntity retrieves an entity by ID for a specific project.
+//
+// It matches on the project-namespaced pk, which is both the fast path (pk is
+// the PRIMARY KEY) and the project-safe one: a bare id can collide across
+// projects sharing a database, and resolving it here by id alone is exactly the
+// cross-project confusion pk exists to prevent.
 func (s *Store) GetEntity(id, projectID string) (*Entity, error) {
+	// A pre-pk database — only reachable on a read-only open, since a read-write
+	// open refuses to proceed without the column — has no pk to match on, and
+	// Kuzu rejects a query that names a missing property outright. Fall back to
+	// the original (id, project_id) match so reads keep working on a legacy graph
+	// that has not yet been rebuilt. This branch is project-scoped and so still
+	// correct; it is merely not a primary-key lookup.
+	where := "e.pk = $pk"
+	params := map[string]any{"pk": PK(projectID, id)}
+	if !s.hasPK {
+		where = "e.id = $id AND e.project_id = $project_id"
+		params = map[string]any{"id": id, "project_id": projectID}
+	}
 	result, err := s.QueryParams(`
 		MATCH (e:Entity)
-		WHERE e.id = $id AND e.project_id = $project_id
+		WHERE `+where+`
 		RETURN `+s.entityColumns()+`
-	`, map[string]any{"id": id, "project_id": projectID})
+	`, params)
 	if err != nil {
 		return nil, fmt.Errorf("query entity: %w", err)
 	}

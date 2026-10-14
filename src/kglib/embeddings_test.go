@@ -167,7 +167,7 @@ func TestSetEmbedding_HNSWInvalidation(t *testing.T) {
 	for i := range embedding {
 		embedding[i] = float32(i) * 0.1
 	}
-	if err := store.SetEmbedding(entity.ID, embedding); err != nil {
+	if err := store.SetEmbedding(entity.ID, projectID, embedding); err != nil {
 		t.Fatalf("SetEmbedding: %v", err)
 	}
 
@@ -176,5 +176,54 @@ func TestSetEmbedding_HNSWInvalidation(t *testing.T) {
 	store.hnswIdx.mu.Unlock()
 	if existsAfter {
 		t.Error("expected HNSW cache to be invalidated after SetEmbedding")
+	}
+}
+
+// SetObservationEmbedding must be project-scoped: a write addressed with the
+// wrong project id must not reach an observation in another project. Proven via
+// GetUnembeddedObservations, which lists only observations whose embedding is
+// still NULL — a write that matched would drop the observation from the list.
+func TestSetObservationEmbedding_ProjectScoped(t *testing.T) {
+	store := setupTestStore(t)
+	defer store.Close()
+
+	const projectID = "obs-embed-scope"
+	entity, err := store.CreateEntity("auth.go", "file", projectID)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	obs, err := store.CreateObservation(entity.ID, "token TTL is 15m", projectID)
+	if err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+
+	embedding := make([]float32, embeddingDim)
+	for i := range embedding {
+		embedding[i] = 0.1
+	}
+
+	// Wrong project: the pk PK("other", obs.ID) exists nowhere, so the match is
+	// empty and the observation stays un-embedded.
+	if err := store.SetObservationEmbedding(obs.ID, "other-project", embedding); err != nil {
+		t.Fatalf("SetObservationEmbedding (wrong project): %v", err)
+	}
+	unembedded, err := store.GetUnembeddedObservations(projectID)
+	if err != nil {
+		t.Fatalf("GetUnembeddedObservations: %v", err)
+	}
+	if len(unembedded) != 1 {
+		t.Fatalf("a wrong-project write changed the embedding: got %d un-embedded, want 1", len(unembedded))
+	}
+
+	// Correct project: the write lands and the observation is no longer un-embedded.
+	if err := store.SetObservationEmbedding(obs.ID, projectID, embedding); err != nil {
+		t.Fatalf("SetObservationEmbedding (correct project): %v", err)
+	}
+	unembedded, err = store.GetUnembeddedObservations(projectID)
+	if err != nil {
+		t.Fatalf("GetUnembeddedObservations after correct write: %v", err)
+	}
+	if len(unembedded) != 0 {
+		t.Errorf("correct-project write did not set the embedding: got %d un-embedded, want 0", len(unembedded))
 	}
 }

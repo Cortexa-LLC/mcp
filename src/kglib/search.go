@@ -178,7 +178,7 @@ func (s *Store) KeywordSearchFiltered(projectID, query string, limit int, filter
 	for i, e := range entities {
 		entityIDs[i] = e.ID
 	}
-	obsMap, err := s.batchGetObservations(entityIDs, 3)
+	obsMap, err := s.batchGetObservations(entityIDs, projectID, 3)
 	if err != nil {
 		// Degrade gracefully — empty observations rather than failing the search.
 		obsMap = map[string][]*Observation{}
@@ -212,16 +212,22 @@ func (s *Store) GetTopObservations(entityID, projectID string, limit int) ([]*Ob
 	// Indexed rows share a timestamp routinely: the indexer stamps one `now`
 	// per file, so every symbol in a file ties.
 	//
+	// Scoped by project through the parent entity, not by o.entity_id alone:
+	// Observation has no project_id column, so matching the edge from an Entity
+	// filtered on project_id is what keeps a project-A search from pulling in a
+	// project-B observation that shares the entity_id. GetObservations takes the
+	// same route.
+	//
 	// LIMIT takes an integer expression; using %d (not user input) is safe here.
 	query := fmt.Sprintf(`
-		MATCH (o:Observation)
-		WHERE o.entity_id = $entity_id
+		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
+		WHERE e.project_id = $project_id AND o.entity_id = $entity_id
 		RETURN o.id, o.entity_id, o.content, o.created_at
 		ORDER BY o.created_at DESC
 		LIMIT %d
 	`, limit)
 
-	result, err := s.QueryParams(query, map[string]any{"entity_id": entityID})
+	result, err := s.QueryParams(query, map[string]any{"entity_id": entityID, "project_id": projectID})
 	if err != nil {
 		return nil, fmt.Errorf("query observations: %w", err)
 	}
@@ -265,7 +271,12 @@ func (s *Store) GetTopObservations(entityID, projectID string, limit int) ([]*Ob
 // in entityIDs using a single Cypher query, eliminating N+1 round-trips.
 // It returns a map keyed by entity ID; entities with no observations are absent.
 // limit is applied per entity: only the newest `limit` rows are kept.
-func (s *Store) batchGetObservations(entityIDs []string, limit int) (map[string][]*Observation, error) {
+//
+// projectID scopes the read: Observation carries no project_id, so under
+// multi-project-per-DB two projects sharing an entity_id would otherwise cross-
+// contaminate each other's search results. Matching the HAS_OBSERVATION edge
+// from an Entity filtered on project_id confines the result to this project.
+func (s *Store) batchGetObservations(entityIDs []string, projectID string, limit int) (map[string][]*Observation, error) {
 	if len(entityIDs) == 0 {
 		return map[string][]*Observation{}, nil
 	}
@@ -281,13 +292,13 @@ func (s *Store) batchGetObservations(entityIDs []string, limit int) (map[string]
 	// counter instead.  We fetch all rows ordered by (entity_id, created_at DESC)
 	// and apply the per-entity limit in Go — this is still a single round-trip.
 	query := `
-		MATCH (o:Observation)
-		WHERE o.entity_id IN $entity_ids
+		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
+		WHERE e.project_id = $project_id AND o.entity_id IN $entity_ids
 		RETURN o.id, o.entity_id, o.content, o.created_at
 		ORDER BY o.entity_id, o.created_at DESC
 	`
 
-	result, err := s.QueryParams(query, map[string]any{"entity_ids": ids})
+	result, err := s.QueryParams(query, map[string]any{"entity_ids": ids, "project_id": projectID})
 	if err != nil {
 		return nil, fmt.Errorf("batch query observations: %w", err)
 	}
@@ -379,7 +390,7 @@ func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit i
 	for i, c := range candidates {
 		entityIDs[i] = c.entity.ID
 	}
-	obsMap, err := s.batchGetObservations(entityIDs, 3)
+	obsMap, err := s.batchGetObservations(entityIDs, projectID, 3)
 	if err != nil {
 		obsMap = map[string][]*Observation{}
 	}

@@ -45,13 +45,31 @@ import (
 // FormatStampFile is the sidecar naming the engine build that wrote a database.
 const formatStampSuffix = ".format.json"
 
+// CurrentSchemaVersion is the kg knowledge-graph schema version this build
+// writes. Unlike KGVersion (the build string, which changes every release and
+// means nothing for compatibility), this is a monotonic integer bumped ONLY on
+// a breaking on-disk schema change that Kuzu cannot migrate in place — which,
+// because Kuzu has no ALTER … ADD PRIMARY KEY and rel tables are bound to their
+// node tables, means a change to a node table's primary key or columns. A
+// database stamped with a lower version (or an older stamp with no version
+// field, which decodes as 0) is reported as FormatMismatch so index/migrate
+// archive and rebuild it.
+//
+//	1 — original schema: Entity/Observation keyed on global `id`.
+//	2 — project-namespaced `pk` PRIMARY KEY added; `id` demoted to a plain column.
+const CurrentSchemaVersion = 2
+
 // FormatStamp is the content of that sidecar.
 type FormatStamp struct {
 	// KuzuVersion is the pinned go-kuzu module version, e.g. "v0.11.3".
 	KuzuVersion string `json:"kuzu_version"`
 	// KGVersion is the kg build that wrote the stamp, for diagnostics only.
-	KGVersion string    `json:"kg_version,omitempty"`
-	StampedAt time.Time `json:"stamped_at"`
+	KGVersion string `json:"kg_version,omitempty"`
+	// SchemaVersion is the kg schema version (see CurrentSchemaVersion). Absent
+	// in stamps written before this field existed, where it decodes as 0 and is
+	// therefore treated as older than any real schema.
+	SchemaVersion int       `json:"schema_version,omitempty"`
+	StampedAt     time.Time `json:"stamped_at"`
 }
 
 // FormatStatus is the verdict of comparing a database's stamp to this build.
@@ -196,9 +214,10 @@ func ReadFormatStamp(dbPath string) (*FormatStamp, error) {
 // read as corrupt and send a perfectly good database down the rebuild path.
 func WriteFormatStamp(dbPath string, kgVersion string) error {
 	stamp := FormatStamp{
-		KuzuVersion: KuzuVersion(),
-		KGVersion:   kgVersion,
-		StampedAt:   time.Now().UTC(),
+		KuzuVersion:   KuzuVersion(),
+		KGVersion:     kgVersion,
+		SchemaVersion: CurrentSchemaVersion,
+		StampedAt:     time.Now().UTC(),
 	}
 	data, err := json.Marshal(stamp)
 	if err != nil {
@@ -250,7 +269,12 @@ func CheckFormat(dbPath string) (FormatStatus, *FormatStamp, error) {
 	if stamp == nil {
 		return FormatUnstamped, nil, nil
 	}
-	if stamp.KuzuVersion != KuzuVersion() {
+	// A storage-format change (Kuzu bump) and a kg schema change (e.g. the pk
+	// primary key) both make the running build unable to use the database as-is;
+	// either one is a mismatch that index/migrate repair by archiving and
+	// rebuilding. SchemaVersion is absent (0) in stamps written before it
+	// existed, which is correctly older than any real schema.
+	if stamp.KuzuVersion != KuzuVersion() || stamp.SchemaVersion < CurrentSchemaVersion {
 		return FormatMismatch, stamp, nil
 	}
 	return FormatOK, stamp, nil
