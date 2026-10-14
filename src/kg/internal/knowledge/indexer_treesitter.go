@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -576,6 +577,14 @@ func (idx *Indexer) processWithTreeSitter(
 	src, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", absPath, err)
+	}
+
+	// Tree-sitter spends the full parse timeout chewing on binary content that
+	// happens to share a source extension (e.g. HLS .ts video segments vs.
+	// TypeScript). A NUL byte in the head is a reliable binary signal — valid
+	// source text never contains one — so skip rather than burn the deadline.
+	if bytes.IndexByte(src[:min(len(src), 8000)], 0) >= 0 {
+		return nil
 	}
 
 	parser := sitter.NewParser()

@@ -755,6 +755,62 @@ export function createShape(): Shape {
 	}
 }
 
+// TestIndexer_BinaryTSSegment verifies that a binary file sharing a source
+// extension (an HLS .ts MPEG transport-stream segment, not TypeScript) is
+// skipped cleanly: the NUL-byte guard in processWithTreeSitter returns before
+// the parser runs, so no file entity is written and the indexer does not burn
+// the 10s parse deadline on content tree-sitter cannot parse.
+//
+// Verified pre/post behavior (guard removed vs. present):
+//   - Without the guard, the blob is fed to the TypeScript parser, which always
+//     writes the "file:clip.ts" entity before walking — so the no-entity
+//     assertion below FAILS. (In production the real symptom is the 10s parse
+//     timeout + warning that HLS .ts segments trigger; this minimal synthetic
+//     blob parses fast, so the clean, deterministic signal here is the written
+//     file entity rather than a stall.)
+//   - With the guard, processWithTreeSitter returns nil before the entity write,
+//     so no entity is created, no error is counted, and the test PASSES.
+func TestIndexer_BinaryTSSegment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Simulate an MPEG-TS segment: 188-byte packets each starting with the
+	// 0x47 sync byte and containing NUL padding bytes. The NUL in the head is
+	// the binary signal the guard keys off.
+	var seg []byte
+	for p := 0; p < 4; p++ {
+		seg = append(seg, 0x47, 0x40, 0x00, 0x10) // TS packet header incl. a NUL
+		for i := 0; i < 184; i++ {
+			seg = append(seg, 0x00) // payload padding (NUL bytes)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "clip.ts"), seg, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store, stats := runIndexer(t, srcDir, dbPath)
+
+	// The binary segment must be skipped before any file entity is written.
+	// This is the assertion that fails without the guard.
+	if entityExistsByName(t, store, "clip.ts", EntityTypeFile) {
+		t.Error("expected no 'file:clip.ts' entity for a skipped binary segment")
+	}
+
+	// A clean skip (return nil) must not be counted as an indexing error — in
+	// production the pre-guard path instead surfaced a parse-timeout error here.
+	if stats.Errors != 0 {
+		t.Errorf("expected 0 indexing errors for a cleanly skipped binary segment, got %d", stats.Errors)
+	}
+}
+
 // TestIndexer_ScalaCalls verifies CALLS edges are attributed to the enclosing
 // function, resolve within a file, and include calls nested inside lambdas.
 func TestIndexer_ScalaCalls(t *testing.T) {
