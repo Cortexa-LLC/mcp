@@ -49,6 +49,10 @@ type IndexStats struct {
 	EntitiesCreated  int
 	RelationsCreated int
 	Errors           int
+	// BinarySkipped counts files skipped as binary by the NUL-byte sniff in
+	// processWithTreeSitter (e.g. HLS .ts video segments sharing the TypeScript
+	// extension). These are not errors; see the guard for the UTF-16/32 caveat.
+	BinarySkipped int
 }
 
 // entityRecord holds entity data before batch insert

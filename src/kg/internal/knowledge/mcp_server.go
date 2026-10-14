@@ -277,6 +277,9 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 
 				msg := fmt.Sprintf("Indexed %d files, created %d entities and %d relations in project '%s'",
 					stats.FilesScanned, stats.EntitiesCreated, stats.RelationsCreated, projectID)
+				if stats.BinarySkipped > 0 {
+					msg += fmt.Sprintf("\nBinary files skipped: %d", stats.BinarySkipped)
+				}
 				switch {
 				case replayErr != nil:
 					// Surfaced rather than swallowed: the hand-written knowledge is

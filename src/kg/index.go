@@ -168,6 +168,9 @@ func indexScopeDB(root, aiDir, scopeName string, missingPKHint *bool) error {
 	fmt.Printf("   Files scanned:     %d\n", stats.FilesScanned)
 	fmt.Printf("   Entities created:  %d\n", stats.EntitiesCreated)
 	fmt.Printf("   Relations created: %d\n", stats.RelationsCreated)
+	if stats.BinarySkipped > 0 {
+		fmt.Printf("   Binary files skipped: %d\n", stats.BinarySkipped)
+	}
 	fmt.Printf("   Duration:          %.3fs\n", codesDur.Seconds())
 
 	// Second pass: index agent execution logs from .ai/tasks/
