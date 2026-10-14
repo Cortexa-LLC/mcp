@@ -336,6 +336,10 @@ func bulkLoadExecEntities(store *Store, entities []entityRecord) error {
 		// unavailable. These entities were already filtered for prior existence
 		// by name, so MERGE only refreshes a genuine re-run rather than colliding.
 		for _, e := range entities {
+			// No visibility here is intentional: exec-log entities carry no
+			// visibility attribute today, unlike code-indexer entities. This is
+			// not a second instance of the ON CREATE/ON MATCH gap fixed in
+			// indexer.go — there is nothing to set.
 			r, err2 := store.QueryParams(`
 				MERGE (n:Entity {pk: $pk})
 				ON CREATE SET n.id = $id, n.name = $name, n.type = $type,

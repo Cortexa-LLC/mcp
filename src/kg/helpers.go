@@ -62,10 +62,28 @@ func findProjectRoot(dir string) string {
 	return dir
 }
 
+// pkSeparator mirrors the Unit Separator (0x1F) that kglib.PK joins project_id
+// and id with to form a collision-free primary key. project_id must never
+// contain it, or the pk for a whole project would be corrupted.
+const pkSeparator = '\x1f'
+
 // projectIDFromCwd returns the project ID for the given working directory.
 // The project ID is the base name of the project root.
+//
+// It also guards the one invariant kglib.PK rests on — that project_id never
+// contains the 0x1F separator. A repo directory basename holding 0x1F is
+// effectively impossible, so this is defending the invariant at its single
+// derivation site rather than handling a real case: if one ever appeared we
+// replace the byte (non-fatally, with a warning) instead of letting a raw
+// separator reach PK and silently collapse every pk for the project.
 func projectIDFromCwd(cwd string) string {
-	return filepath.Base(findProjectRoot(cwd))
+	id := filepath.Base(findProjectRoot(cwd))
+	if strings.ContainsRune(id, pkSeparator) {
+		fmt.Fprintf(os.Stderr,
+			"Warning: project_id %q contains the reserved 0x1F separator; replacing with '_' to preserve primary-key uniqueness\n", id)
+		id = strings.ReplaceAll(id, string(pkSeparator), "_")
+	}
+	return id
 }
 
 // openStore locates the project root, opens the knowledge graph store in
