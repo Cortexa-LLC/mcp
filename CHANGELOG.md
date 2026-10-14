@@ -61,6 +61,10 @@ everything below it is unreleased.
 - Observation-age statistics over a graph with no timestamped rows no longer fail the
   whole `kg health` run; a null registry entry no longer panics the hub at startup. (#4)
 - Legacy PDF cleanup matches extensions case-insensitively.
+- Binary files that share a source extension (e.g. HLS `.ts` video segments masquerading
+  as TypeScript) are skipped by a NUL-byte sniff before the tree-sitter parse, instead of
+  burning the full 10s parse deadline on content the parser cannot handle. Skips are
+  counted in the index summary. (#18)
 
 ### Changed
 

@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -562,6 +563,11 @@ func init() {
 	langRegistry[".bash"] = bashCfg
 }
 
+// binarySniffBytes is how many leading bytes the NUL-byte binary guard
+// inspects — matching the 8000-byte buffer git fills for its own binary
+// detection, so our "valid source has no NUL in the head" claim has git parity.
+const binarySniffBytes = 8000
+
 // processWithTreeSitter parses the given file using tree-sitter and emits
 // entities/relations into the provided CSV writers.
 func (idx *Indexer) processWithTreeSitter(
@@ -576,6 +582,19 @@ func (idx *Indexer) processWithTreeSitter(
 	src, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", absPath, err)
+	}
+
+	// Tree-sitter spends the full parse timeout chewing on binary content that
+	// happens to share a source extension (e.g. HLS .ts video segments vs.
+	// TypeScript). A NUL byte in the head is a reliable binary signal — valid
+	// UTF-8 source text never contains one — so skip rather than burn the
+	// deadline. Known tradeoff: a legitimate UTF-16/UTF-32 source file (NUL
+	// bytes interleaved with ASCII) would also be skipped; git's own binary
+	// heuristic sniffs for NUL the same way and shares this limitation. The
+	// skip is counted in stats.BinarySkipped so it isn't silently invisible.
+	if bytes.IndexByte(src[:min(len(src), binarySniffBytes)], 0) >= 0 {
+		stats.BinarySkipped++
+		return nil
 	}
 
 	parser := sitter.NewParser()
