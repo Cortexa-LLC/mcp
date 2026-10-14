@@ -134,6 +134,11 @@ type ExportedType struct {
 		t.Errorf("expected at least 1 entity, got %d", stats.EntitiesCreated)
 	}
 
+	// A normal UTF-8 source file must not trip the binary guard.
+	if stats.BinarySkipped != 0 {
+		t.Errorf("expected BinarySkipped == 0 for a normal source file, got %d", stats.BinarySkipped)
+	}
+
 	// Exported function must be extracted.
 	if !entityExistsByName(t, store, "ExportedFunc", "function") {
 		t.Error("expected entity 'ExportedFunc' (function) to be created")
@@ -808,6 +813,12 @@ func TestIndexer_BinaryTSSegment(t *testing.T) {
 	// production the pre-guard path instead surfaced a parse-timeout error here.
 	if stats.Errors != 0 {
 		t.Errorf("expected 0 indexing errors for a cleanly skipped binary segment, got %d", stats.Errors)
+	}
+
+	// The skip must be observable in stats so this failure mode isn't invisible
+	// if the NUL sniff ever fires on a real repo (see IndexStats.BinarySkipped).
+	if stats.BinarySkipped != 1 {
+		t.Errorf("expected BinarySkipped == 1 for the clip.ts segment, got %d", stats.BinarySkipped)
 	}
 }
 
