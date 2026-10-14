@@ -23,7 +23,7 @@ func handleServer(cmd *cobra.Command) {
 	}
 	projectRoot := findProjectRoot(cwd)
 	aiDir := filepath.Join(projectRoot, ".ai")
-	projectID := filepath.Base(projectRoot)
+	projectID := projectIDFromCwd(projectRoot)
 
 	// Determine which scope to use for the MCP server
 	// Priority: default scope > legacy mode (knowledge.db)

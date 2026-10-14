@@ -71,11 +71,15 @@ const pkSeparator = '\x1f'
 // The project ID is the base name of the project root.
 //
 // It also guards the one invariant kglib.PK rests on — that project_id never
-// contains the 0x1F separator. A repo directory basename holding 0x1F is
-// effectively impossible, so this is defending the invariant at its single
-// derivation site rather than handling a real case: if one ever appeared we
-// replace the byte (non-fatally, with a warning) instead of letting a raw
-// separator reach PK and silently collapse every pk for the project.
+// contains the 0x1F separator. This is the derivation helper every path-derived
+// project_id flows through (index, search, stats, show, meta, push, the MCP
+// server, and the federated-graph filter all route through it), so guarding the
+// byte here guards it everywhere the value is matched against the stored
+// project_id column. A repo directory basename holding 0x1F is effectively
+// impossible, so this defends the invariant rather than handling a real case:
+// if one ever appeared we replace the byte (non-fatally, with a warning)
+// instead of letting a raw separator reach PK and silently collapse every pk
+// for the project.
 func projectIDFromCwd(cwd string) string {
 	id := filepath.Base(findProjectRoot(cwd))
 	if strings.ContainsRune(id, pkSeparator) {
@@ -138,5 +142,5 @@ func openStoreModeWithScope(readOnly bool, scopeName string) (*knowledge.Store, 
 	if err != nil {
 		return nil, "", err
 	}
-	return store, filepath.Base(root), nil
+	return store, projectIDFromCwd(root), nil
 }

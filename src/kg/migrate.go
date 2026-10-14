@@ -208,7 +208,17 @@ every scope and the personal store in one pass, or to see what would happen.`,
 			// the read-only open it does is not repeated there.
 			var missingHint *bool
 			if !needsRebuild && status == kglib.FormatUnstamped {
-				if missing, mErr := databaseMissingPK(dbPath); mErr == nil && missing {
+				missing, mErr := databaseMissingPK(dbPath)
+				if mErr != nil {
+					// Mirror the CheckFormat-error path above: an introspection we
+					// could not complete is not evidence that this build can read
+					// the database, so it must count as unchecked (failf) rather
+					// than fall through with needsRebuild=false and reach the
+					// all-clear summary for a database we never resolved.
+					failf("scope %s: cannot determine whether %s predates the primary key: %v", label, dbPath, mErr)
+					continue
+				}
+				if missing {
 					needsRebuild = true
 					missingHint = &missing
 				}
