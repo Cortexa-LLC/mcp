@@ -355,7 +355,15 @@ func decodeSearchRequest(r *http.Request) (*searchRequest, error) {
 }
 
 // searchGraph opens a graph's current database read-only and runs a hybrid
-// keyword search (no embedding: the hub does not generate query embeddings).
+// search. The query is embedded when the target graph already holds vectors
+// and an embedding provider answers; otherwise SearchEmbedding returns nil and
+// this degrades to keyword matching (see knowledge/query_embed.go).
+//
+// Each request opens its own store, so the HNSW index is rebuilt per request
+// on a graph that has embeddings — the per-call rebuild cost the PR notes for
+// the MCP server, and more pointed here because the hub serves concurrent
+// callers. Holding the store open across requests is the fix and is out of
+// scope for this change.
 func (s *Server) searchGraph(name string, info *GraphInfo, query string, limit int) ([]*knowledge.SearchResult, error) {
 	dbPath, err := s.currentDBPath(name, info.Commit)
 	if err != nil {

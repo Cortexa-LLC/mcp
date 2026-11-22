@@ -355,6 +355,13 @@ func (s *Store) batchGetObservations(entityIDs []string, projectID string, limit
 // neighbour search over-fetches to compensate: asking HNSW for exactly limit
 // neighbours would return far fewer than limit distinct entities.
 func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit int) ([]*SearchResult, error) {
+	return s.VectorSearchFiltered(projectID, queryEmbedding, limit, SearchFilter{})
+}
+
+// VectorSearchFiltered is VectorSearch with the filter honoured, mirroring
+// KeywordSearch / KeywordSearchFiltered. See VectorSearch for how the
+// neighbour search and the per-entity collapse work.
+func (s *Store) VectorSearchFiltered(projectID string, queryEmbedding []float32, limit int, filter SearchFilter) ([]*SearchResult, error) {
 	if len(queryEmbedding) == 0 {
 		return nil, fmt.Errorf("query embedding cannot be empty")
 	}
@@ -390,6 +397,21 @@ func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit i
 		for _, node := range neighbours {
 			entity, ok := idx.entities[node.Key]
 			if !ok {
+				continue
+			}
+			// The vector path has to exclude private entities itself. The
+			// keyword path pushes PublicOnly into the Cypher WHERE clause, and
+			// rankResults only *demotes* private entities by a score penalty —
+			// it never drops them — so without this skip a private entity with
+			// a strong vector match lands in a --public-only result set.
+			//
+			// The skip belongs here, inside the collection the widening loop
+			// below re-runs, rather than after the search returns: results are
+			// truncated to limit on the way out, so a private entity dropped
+			// afterwards would already have consumed a result slot and left
+			// the page under-filled. Skipping it during collection lets the
+			// widening compensate and find a public entity to take its place.
+			if filter.PublicOnly && entity.Visibility == VisibilityPrivate {
 				continue
 			}
 			similarity := cosineSimilarity32(queryEmbedding, node.Value)
@@ -524,7 +546,7 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 
 	// Vector search results (when implemented)
 	if len(queryEmbedding) > 0 {
-		vectorResults, err := s.VectorSearch(projectID, queryEmbedding, config.Limit*2)
+		vectorResults, err := s.VectorSearchFiltered(projectID, queryEmbedding, config.Limit*2, config.Filter)
 		if err != nil {
 			return nil, fmt.Errorf("vector search: %w", err)
 		}
