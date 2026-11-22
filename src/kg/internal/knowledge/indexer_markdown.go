@@ -10,8 +10,20 @@ package knowledge
 // What gets indexed
 // -----------------
 //   Headings H1–H3       → "topic" entities (architectural concepts / sections)
+//   Section prose        → observations on the heading's topic entity, chunked
+//                          like PDF text so each chunk stays inside an
+//                          embedding model's context window
+//   Preamble prose       → observations on the file entity (text above the
+//                          first heading)
 //   Mermaid code blocks  → "type" entities  (component / node labels extracted
 //                          from graph/flowchart/sequence diagrams)
+//
+// Indexing the prose, not just the headings, is the point: a design document's
+// rationale lives in its paragraphs, and a graph that holds only its table of
+// contents can answer "is there a section called X" but never "why was X
+// decided". Headings alone was the original behaviour and it made every
+// markdown file in a repository — ADRs, CHANGELOG, CLAUDE.md — invisible to
+// search below the heading line.
 //
 // Adding support for more Markdown constructs is typically a one-line change:
 //   - New heading level threshold  → change the `level > 3` guard in processMarkdownFile
@@ -23,10 +35,13 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/markdown"
 )
@@ -57,13 +72,41 @@ var mermaidNodeRe = regexp.MustCompile(
 		`)`,
 )
 
-// processMarkdownFile parses one Markdown file and emits heading topics and
-// mermaid diagram component entities into the shared CSV writers.
+const (
+	// mdChunkMaxBytes bounds one section-prose observation, matching
+	// pdfChunkMaxBytes for the same reason: an observation is embedded as a
+	// single text, so it has to fit an embedding model's context window.
+	mdChunkMaxBytes = 2000
+
+	// mdMinSectionLen is the shortest section body worth recording, in runes.
+	// Above pdfMinChunkLen because a markdown section legitimately contains a
+	// one-word body ("TBD", "None", a bare link) far more often than a page of
+	// extracted PDF text does, and those carry no retrievable meaning.
+	mdMinSectionLen = 32
+)
+
+// mdSection is one heading found during the block-tree walk: the topic entity
+// it produced, and the byte range of the heading line itself.
+//
+// A section's body is everything between the end of its heading and the start
+// of the next one, which is not knowable until the whole file has been walked
+// — hence collecting sections first and slicing the source afterwards, rather
+// than accumulating text inside the tree callback.
+type mdSection struct {
+	entityID  string
+	headingAt int // start byte of the heading line
+	bodyAt    int // end byte of the heading line; the body starts here
+}
+
+// processMarkdownFile parses one Markdown file and emits heading topics,
+// mermaid diagram component entities, and one observation per chunk of the
+// prose under each heading.
 func (idx *Indexer) processMarkdownFile(
 	absPath, relPath string,
 	entities *[]entityRecord,
 	seenEntities map[string]bool,
 	relations *[]relationRecord,
+	observations *[]obsRecord,
 	stats *IndexStats,
 ) error {
 	src, err := os.ReadFile(absPath)
@@ -83,6 +126,8 @@ func (idx *Indexer) processMarkdownFile(
 		return fmt.Errorf("parse %s: %w", absPath, err)
 	}
 
+	var sections []mdSection
+
 	tree.Iter(func(node *markdown.Node) bool {
 		switch node.Type() {
 		case "atx_heading":
@@ -100,6 +145,16 @@ func (idx *Indexer) processMarkdownFile(
 			}
 			*relations = append(*relations, relationRecord{FromID: fileID, ToID: eid, Type: RelContains})
 
+			// Recorded even when writeEntity reports the entity as already
+			// seen. A file that repeats a heading still has distinct prose
+			// under the second one, and it belongs on the same topic; skipping
+			// it would drop the body silently.
+			sections = append(sections, mdSection{
+				entityID:  eid,
+				headingAt: int(node.Node.StartByte()),
+				bodyAt:    int(node.Node.EndByte()),
+			})
+
 		case "fenced_code_block":
 			lang, content := mdExtractCodeBlock(node.Node, src)
 			if !mdDiagramLangs[strings.ToLower(lang)] {
@@ -116,7 +171,63 @@ func (idx *Indexer) processMarkdownFile(
 		return true
 	})
 
+	// Iter walks the block tree, and nothing in its contract promises the
+	// callback fires in source order. Section bodies are cut from the byte
+	// offsets of adjacent headings, so an out-of-order slice would hand one
+	// section another's prose, or a negative range.
+	sort.Slice(sections, func(i, j int) bool {
+		return sections[i].headingAt < sections[j].headingAt
+	})
+
+	// Prose above the first heading belongs to the document, not to any
+	// section: the lead paragraph of a design doc is routinely the only place
+	// its purpose is stated.
+	preambleEnd := len(src)
+	if len(sections) > 0 {
+		preambleEnd = sections[0].headingAt
+	}
+	idx.emitMarkdownProse(fileID, string(src[:preambleEnd]), observations, now)
+
+	for i, sec := range sections {
+		bodyEnd := len(src)
+		if i+1 < len(sections) {
+			bodyEnd = sections[i+1].headingAt
+		}
+		// A heading nested inside another block (a list item, a block quote)
+		// can end after the next heading starts. Slicing that range would
+		// panic; the section simply has no body of its own.
+		if sec.bodyAt >= bodyEnd {
+			continue
+		}
+		idx.emitMarkdownProse(sec.entityID, string(src[sec.bodyAt:bodyEnd]), observations, now)
+	}
+
 	return nil
+}
+
+// emitMarkdownProse chunks one section body and appends an observation per
+// chunk to entityID. A heading with nothing under it produces nothing.
+func (idx *Indexer) emitMarkdownProse(
+	entityID, body string,
+	observations *[]obsRecord,
+	now time.Time,
+) {
+	text := normaliseWhitespace(body)
+	if utf8.RuneCountInString(text) < mdMinSectionLen {
+		return
+	}
+	for _, chunk := range chunkTextLabeled(text, mdChunkMaxBytes, "section") {
+		if utf8.RuneCountInString(chunk) < mdMinSectionLen {
+			continue
+		}
+		*observations = append(*observations, obsRecord{
+			id:        uuid.NewString(),
+			entityID:  entityID,
+			content:   chunk,
+			created:   now,
+			projectID: idx.projectID,
+		})
+	}
 }
 
 // mdHeadingLevel returns the ATX heading level (1–6) by inspecting the marker

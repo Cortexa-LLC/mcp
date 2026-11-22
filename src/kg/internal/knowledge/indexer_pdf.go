@@ -209,10 +209,24 @@ func normaliseWhitespace(s string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
-// chunkText splits text into slices of at most maxBytes UTF-8 bytes.
+// chunkText splits PDF text into slices of at most maxBytes UTF-8 bytes.
 // Splits are always made at a newline boundary where possible, and never
 // in the middle of a multi-byte rune.
 func chunkText(text string, maxBytes int) []string {
+	return chunkTextLabeled(text, maxBytes, "PDF chunk")
+}
+
+// chunkTextLabeled is chunkText with a caller-chosen label for the ordinal
+// prefix each chunk carries when the text had to be split. The prefix exists
+// so a reader of one observation can tell it is a fragment of a longer
+// document rather than a complete note; label names what kind of fragment it
+// is ("PDF chunk", "section").
+//
+// Text that fits in one chunk is returned unprefixed: the overwhelming
+// majority of markdown sections are a single chunk, and labelling those would
+// put boilerplate at the head of almost every observation in the graph — where
+// it would be embedded along with the prose and dilute every vector.
+func chunkTextLabeled(text string, maxBytes int, label string) []string {
 	if len(text) <= maxBytes {
 		return []string{text}
 	}
@@ -245,7 +259,7 @@ func chunkText(text string, maxBytes int) []string {
 
 		chunk := strings.TrimSpace(remaining[:splitAt])
 		if chunk != "" {
-			chunks = append(chunks, fmt.Sprintf("[PDF chunk %d] %s", len(chunks)+1, chunk))
+			chunks = append(chunks, fmt.Sprintf("[%s %d] %s", label, len(chunks)+1, chunk))
 		}
 		remaining = strings.TrimSpace(remaining[splitAt:])
 	}
