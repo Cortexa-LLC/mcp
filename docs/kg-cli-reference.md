@@ -215,18 +215,20 @@ layers it came from.
 
 The file carries no external references: no CDN, no network at view time, so it
 keeps working offline and inside a repository that forbids third-party script
-origins. A 200-node graph is roughly 80 KB. Like the other formats the output
-is deterministic, so a committed page only changes when the graph does.
+origins. Its own script and style are inline and unhashed, though, so serving
+it under a Content-Security-Policy without `'unsafe-inline'` leaves a blank
+page. A 200-node graph is roughly 50-80 KB depending on how long the entity IDs
+are. Like the other formats the output is deterministic, so a committed page
+only changes when the graph does.
 
 ```bash
 kg graph --root Store --depth 2 --format html -o kg.html
 open kg.html
 ```
 
-Labels are drawn for every node in a graph under 140 nodes; above that, for the
-root and for hubs, with the rest on hover. Nodes are sized by relation count
+Labels are drawn for every node in a graph of 140 nodes or fewer; above that,
+for the root and for hubs, with the rest on hover. Nodes are sized by relation count
 and coloured by entity type.
-```
 
 **Start from a `--root`.** Without one the whole graph is rendered, and for a real
 project that is a hairball no renderer can help with — a few hundred entities is

@@ -18,8 +18,9 @@ everything below it is unreleased.
 - **`kg graph --format html`** — a self-contained interactive page for the same
   neighbourhood the other formats draw: drag, zoom, click a node to isolate its
   neighbourhood, filter by name or entity type. Carries no external references,
-  so it works offline and under a strict script-src policy, and its output is
-  deterministic like the other formats.
+  so it works offline and inside a repository that forbids third-party script
+  origins, and its output is deterministic like the other formats. The page's
+  own script and style are inline, so a CSP without `'unsafe-inline'` blocks it.
 - **Cross-layer entity linking** for `kg graph --federated`: derived `DEPENDS_ON` edges
   are resolved from imports to the packages they name, replacing the `(name, type)`
   join that manufactured edges nobody recorded. `--join-types` and `--no-derived`
