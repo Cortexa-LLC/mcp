@@ -72,6 +72,21 @@ func TestRenderHTMLEmbedsTheSubgraphVerbatim(t *testing.T) {
 		t.Fatalf("payload has %d nodes/%d edges, want %d/%d",
 			len(got.Nodes), len(got.Edges), len(sub.Nodes), len(sub.Edges))
 	}
+	// Counts alone would not notice a renderer that kept the right number of
+	// nodes but corrupted what is in them, so compare the fields the page
+	// actually draws from.
+	for i, want := range sub.Nodes {
+		if got.Nodes[i].ID != want.ID || got.Nodes[i].Name != want.Name ||
+			got.Nodes[i].Type != want.Type || got.Nodes[i].Depth != want.Depth {
+			t.Errorf("node %d = %+v, want %+v", i, got.Nodes[i], want)
+		}
+	}
+	for i, want := range sub.Edges {
+		if got.Edges[i].FromID != want.FromID || got.Edges[i].ToID != want.ToID ||
+			got.Edges[i].Type != want.Type {
+			t.Errorf("edge %d = %+v, want %+v", i, got.Edges[i], want)
+		}
+	}
 	if got.RootID != sub.RootID {
 		t.Errorf("payload root = %q, want %q", got.RootID, sub.RootID)
 	}
@@ -106,10 +121,21 @@ func TestRenderHTMLNeutralisesScriptClosingInNames(t *testing.T) {
 	if strings.Contains(page, hostile) {
 		t.Error("hostile name appears unescaped in the page")
 	}
-	// ...and it must still be *present*, escaped, rather than dropped: a
-	// renderer that silently discarded the name would also pass the above.
-	if !strings.Contains(page, `</script>`) {
-		t.Error("escaped form of the name is absent, so it was dropped rather than escaped")
+	// ...and it must still be *recoverable*, escaped, rather than dropped or
+	// mangled. The two checks above are both satisfied by a renderer that
+	// silently discarded the name, so the property worth pinning is that the
+	// escaping is lossless: the name the page carries decodes back to the one
+	// that went in.
+	var got Subgraph
+	if err := json.Unmarshal([]byte(payloadOf(t, page)), &got); err != nil {
+		t.Fatalf("payload is not valid JSON: %v", err)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("payload has %d nodes, want 1", len(got.Nodes))
+	}
+	if got.Nodes[0].Name != hostile {
+		t.Errorf("escaping was not lossless: payload decodes to %q, want %q",
+			got.Nodes[0].Name, hostile)
 	}
 }
 

@@ -4,8 +4,10 @@ package knowledge
 // above reads as Go rather than as a wall of markup.
 //
 // Written without backticks so that it can live in a Go raw string literal,
-// and without template literals or optional chaining so that it runs in any
-// browser from the last decade.
+// and in ES5 — no template literals, no optional chaining — so that nothing
+// here needs transpiling. The binding constraint on how old a browser can be
+// is not the syntax but the Pointer Events the drag and pan handlers use,
+// which Safari only shipped in 13 (2019); every current browser has them.
 
 const htmlTemplate = `<!doctype html>
 <html lang="en">
@@ -430,6 +432,18 @@ const htmlTemplate = `<!doctype html>
     return labelAll || n.id === rootID || (deg[n.id] || 0) >= CFG.labelHubDegree;
   }
 
+  // String.length counts UTF-16 code units, so a naive slice can land between
+  // the halves of a surrogate pair and leave a lone half the font draws as a
+  // replacement glyph. Entity names are usually source identifiers, but topic
+  // names are freeform and may hold anything, so step back off a split pair.
+  function ellipsize(s, max) {
+    if (s.length <= max) { return s; }
+    var cut = max - 1;
+    var last = s.charCodeAt(cut - 1);
+    if (last >= 0xD800 && last <= 0xDBFF) { cut--; }
+    return s.slice(0, cut) + "…";
+  }
+
   for (var ei = 0; ei < edges.length; ei++) {
     var line = document.createElementNS(SVGNS, "line");
     line.setAttribute("class", edges[ei].derived ? "edge derived" : "edge");
@@ -451,7 +465,7 @@ const htmlTemplate = `<!doctype html>
       text.setAttribute("x", radiusOf(node) + CFG.labelOffset);
       text.setAttribute("y", CFG.labelOffset);
       // textContent, never innerHTML: an entity name is data.
-      text.textContent = node.name.length > CFG.labelMaxChars ? node.name.slice(0, CFG.labelMaxChars - 1) + "…" : node.name;
+      text.textContent = ellipsize(node.name, CFG.labelMaxChars);
       g.appendChild(text);
     }
     node.el = g;
