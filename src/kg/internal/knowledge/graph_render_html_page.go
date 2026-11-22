@@ -593,6 +593,15 @@ const htmlTemplate = `<!doctype html>
       drag = null;
       ev.stopPropagation();
     });
+    // A drag that ends in a cancel rather than a pointerup gets no pointerup
+    // at all — a system gesture interrupting a touch is the usual way. Without
+    // this the node keeps pinned set, and tick() zeroes its velocity forever,
+    // so it sits frozen through every later re-layout. No select() here: a
+    // cancelled gesture is not a click.
+    g.addEventListener("pointercancel", function () {
+      if (drag) { node.pinned = false; }
+      drag = null;
+    });
     g.addEventListener("pointerenter", function (ev) { showTip(node, ev); });
     g.addEventListener("pointerleave", function () { tip.hidden = true; });
   }
