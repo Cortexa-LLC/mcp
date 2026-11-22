@@ -168,7 +168,16 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 		"get_preflight_context": func(req *mcp.ToolCallRequest) (any, error) {
 			return withSearch(func(s KeywordSearcher) (any, error) {
 				task, _ := req.Arguments["task"].(string)
-				entities, err := s.KeywordSearch(projectID, task, 16)
+				// A task description is a sentence, not a symbol — the surface
+				// where keyword-only matching fails hardest, and the first
+				// thing an agent calls. Hybrid so the prose in the graph
+				// (markdown sections, review findings, PDF text) is reachable;
+				// the embedding is nil, and the search pure keyword, whenever
+				// the graph holds no vectors.
+				cfg := DefaultSearchConfig()
+				cfg.Limit = 16
+				entities, err := s.HybridSearch(projectID, task,
+					SearchEmbedding(EmbedSourceFor(s), projectID, task), cfg)
 				if err != nil {
 					return nil, err
 				}
@@ -190,8 +199,11 @@ func buildTools(aiDir string, scopeConfig *ScopeConfig, projectID, projectRoot s
 					lim = 12
 				}
 				publicOnly, _ := req.Arguments["public_only"].(bool)
-				return s.KeywordSearchFiltered(projectID, q, int(lim),
-					kglib.SearchFilter{PublicOnly: publicOnly})
+				cfg := DefaultSearchConfig()
+				cfg.Limit = int(lim)
+				cfg.Filter = kglib.SearchFilter{PublicOnly: publicOnly}
+				return s.HybridSearch(projectID, q,
+					SearchEmbedding(EmbedSourceFor(s), projectID, q), cfg)
 			})
 		},
 

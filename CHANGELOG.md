@@ -40,6 +40,13 @@ everything below it is unreleased.
 - Unexported symbols are indexed, carrying a visibility marker.
 - **CI** — per-module Go build and test, enforced `gofmt`, and an automated Claude
   reviewer that posts a verdict as a required check. (#8, #13)
+- **Markdown prose is indexed, not just headings.** The body under each H1–H3 heading
+  becomes observations on that heading's topic entity, chunked like PDF text; prose above
+  the first heading goes on the file entity. Content under an H4+ subheading lands on the
+  enclosing indexed section, so detail below the heading cut-off is reachable instead of
+  dropped. A design document's reasoning lives in its paragraphs, and indexing only the
+  headings left every ADR, CHANGELOG and `CLAUDE.md` in a repository searchable by table
+  of contents alone.
 
 ### Fixed
 
@@ -82,6 +89,30 @@ everything below it is unreleased.
   as TypeScript) are skipped by a NUL-byte sniff before the tree-sitter parse, instead of
   burning the full 10s parse deadline on content the parser cannot handle. Skips are
   counted in the index summary. (#18)
+- **Semantic search actually runs.** Every caller passed a nil query embedding, which
+  skips the vector half of `HybridSearch` outright, so `kg search`, the MCP
+  `search_knowledge` and `get_preflight_context` tools, and the hub endpoint were all
+  keyword substring matching — `kg embed` filled a column nothing read. Queries are now
+  embedded with the model recorded in the graph's metadata (the environment's model is
+  the fallback, never the override: a vector from the wrong model is noise ranked like
+  signal), and only when the graph holds vectors and a provider answers within 10s.
+  Everything else degrades to keyword silently, as before.
+- **Observation vectors are searchable.** The vector index held entity vectors only, and
+  an entity vector is the embedding of `"<type>: <name>"` — so prose was unreachable
+  semantically even with a query vector. Observation vectors are now nodes in the index,
+  resolving to their parent entity; writing one invalidates the index, which it did not
+  before. Results are deduplicated per entity and the neighbour search widens until the
+  page fills, so one long document cannot evict every other match.
+- The vector index is seeded deterministically. `hnsw.NewGraph` seeds level generation
+  from the wall clock and the index is rebuilt per process, so identical queries against
+  an unchanged graph could return different hits — observed diverging between two runs
+  over the same 221 vectors.
+- `HybridSearch` no longer discards the caller's `SearchFilter` when `Limit` is unset: it
+  replaced the whole config with the default, so a `--public-only` search with no limit
+  came back unfiltered.
+- `kg embed`'s help and the CLI reference both claimed indexing embeds as it goes. It
+  does not — `kg embed` is the only writer of vectors, so a freshly indexed project had
+  none and semantic search could never engage.
 
 ### Changed
 

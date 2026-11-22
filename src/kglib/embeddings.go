@@ -184,7 +184,13 @@ func (s *Store) SetEmbedding(entityID, projectID string, embedding []float32) er
 	return nil
 }
 
-// SetObservationEmbedding stores an embedding vector for an observation.
+// SetObservationEmbedding stores an embedding vector for an observation and
+// invalidates the project's in-memory HNSW index, exactly as SetEmbedding
+// does: observation vectors are nodes in that index (see buildIndex), so
+// without the invalidation a vector written after the first VectorSearch of a
+// process would not be searchable until the index happened to be rebuilt for
+// some other reason. That was invisible while the index held entity vectors
+// only.
 //
 // Matched by the project-namespaced pk, consistent with SetEmbedding and every
 // other write: an observation id is a UUID so a cross-project collision is
@@ -202,5 +208,42 @@ func (s *Store) SetObservationEmbedding(observationID, projectID string, embeddi
 	}
 	defer result.Close()
 
+	// Same invalidation as SetEmbedding, for the same reason: this vector is a
+	// node in the project's HNSW index.
+	if projectID != "" {
+		s.hnswIdx.invalidate(projectID)
+	}
+
 	return nil
+}
+
+// HasEmbeddings reports whether the project has any vector at all — on an
+// entity or on an observation.
+//
+// Callers use it to decide whether to spend an embedding call on the search
+// query. Embedding a query is a network round trip to a paid API; doing it
+// against a graph that was never embedded buys a vector search over an empty
+// index. The two LIMIT 1 probes below are cheap by comparison, and the answer
+// is stable for the life of a read-only open.
+func (s *Store) HasEmbeddings(projectID string) (bool, error) {
+	probes := []string{
+		`MATCH (e:Entity)
+		 WHERE e.project_id = $project_id AND e.embedding IS NOT NULL
+		 RETURN 1 LIMIT 1`,
+		`MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
+		 WHERE e.project_id = $project_id AND o.embedding IS NOT NULL
+		 RETURN 1 LIMIT 1`,
+	}
+	for _, q := range probes {
+		result, err := s.QueryParams(q, map[string]any{"project_id": projectID})
+		if err != nil {
+			return false, fmt.Errorf("probe embeddings: %w", err)
+		}
+		found := result.HasNext()
+		result.Close()
+		if found {
+			return true, nil
+		}
+	}
+	return false, nil
 }

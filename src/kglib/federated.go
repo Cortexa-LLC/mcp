@@ -115,8 +115,10 @@ func (fs *FederatedStore) isPrimary(l *layeredStore) bool {
 // HybridSearch performs hybrid search across all layers and merges results.
 // Results from higher-priority layers override lower-priority duplicates.
 func (fs *FederatedStore) HybridSearch(projectID, query string, queryEmbedding []float32, config SearchConfig) ([]*SearchResult, error) {
+	// Only the limit is filled in: replacing the whole config here dropped
+	// config.Filter, so a public-only federated search came back unfiltered.
 	if config.Limit == 0 {
-		config = DefaultSearchConfig()
+		config.Limit = DefaultSearchConfig().Limit
 	}
 	// One clock for the whole federated query. Each layer would otherwise
 	// sample its own, and results queried microseconds apart would carry

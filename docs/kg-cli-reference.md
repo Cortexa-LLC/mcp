@@ -94,8 +94,27 @@ kg index --all               # every defined scope, in turn
 
 ### `kg search <query>`
 
-Keyword search across all entities and observations. Hybrid search — combines
-exact keyword matching with vector similarity if embeddings are configured.
+Search across all entities and observations. Keyword matching always runs:
+query tokens are lowercased and OR-matched as substrings against entity names
+and observation content.
+
+Semantic (vector) matching runs **in addition** when all of the following hold,
+and is silently skipped otherwise — a search that still works beats one that
+fails because a provider is unreachable:
+
+- the graph holds at least one embedding (`kg embed` writes them; indexing does
+  not), and
+- an embedding provider is configured and answers within 10 seconds.
+
+The query is embedded with the model recorded in the graph's own metadata (see
+`kg meta`), falling back to `KNOWLEDGE_EMBED_MODEL`. The stored model wins
+deliberately: a query vector built with a different model than the stored
+vectors is noise, and it would be ranked and displayed exactly like signal.
+
+Both entity vectors and observation vectors are searched. That distinction
+matters more than it sounds: an entity vector is the embedding of its *name*,
+so prose — a markdown section's body, a PDF's text, a recorded review finding —
+is reachable only through observation vectors.
 
 ```bash
 kg search "auth middleware"
@@ -737,12 +756,17 @@ kg embed --scope selling   # a named scope
 kg embed --personal        # the personal knowledge store
 ```
 
-Indexing embeds as it goes when a provider is configured, so this is for the
-case where one was configured *afterwards*: it embeds only what is missing,
-rather than making you re-index the project to pick embeddings up.
+Indexing does **not** embed. `kg embed` is the only thing that writes vectors,
+so a freshly indexed project has none and `kg search` is keyword-only until you
+run it. It embeds only what is missing, so re-running it after an index is
+cheap.
 
 Requires `OPENAI_API_KEY` or `OLLAMA_HOST`, and fails with a non-zero exit if
 neither is set. Without embeddings, search falls back to keyword matching.
+
+The embedding columns are fixed at `FLOAT[1536]`, which is the width of
+OpenAI's `text-embedding-3-small` and `text-embedding-3-large` is not; a model
+of any other width is rejected on write by the database.
 
 ---
 

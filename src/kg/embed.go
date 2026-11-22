@@ -16,9 +16,9 @@ var embedCmd = &cobra.Command{
 	Short: "Generate and attach vector embeddings for entities and observations",
 	Long: `Backfill vector embeddings for anything in the graph that lacks them.
 
-Indexing embeds as it goes when an embedding provider is configured, so this is
-for the case where one was configured afterwards: rather than re-indexing the
-whole project to pick up embeddings, embed only what is missing them.
+Indexing does not embed — this command is the only thing that writes vectors,
+so a freshly indexed project has none and search is keyword-only until it runs.
+It embeds only what is missing, so re-running it after an index is cheap.
 
 Requires OPENAI_API_KEY or OLLAMA_HOST. Without embeddings, search falls back to
 keyword matching, which works — it is just not semantic.

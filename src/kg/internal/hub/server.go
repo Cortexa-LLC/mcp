@@ -369,7 +369,8 @@ func (s *Server) searchGraph(name string, info *GraphInfo, query string, limit i
 
 	cfg := knowledge.DefaultSearchConfig()
 	cfg.Limit = limit
-	results, err := store.HybridSearch(info.ProjectID, query, nil, cfg)
+	results, err := store.HybridSearch(info.ProjectID, query,
+		knowledge.SearchEmbedding(store, info.ProjectID, query), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("search graph %s: %w", name, err)
 	}
