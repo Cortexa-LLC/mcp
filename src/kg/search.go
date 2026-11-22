@@ -50,7 +50,8 @@ exported ones. Use --public-only to see just a package's API surface.`,
 			}
 			defer store.Close()
 
-			results, err := store.HybridSearch(projectID, args[0], nil, searchConfig())
+			results, err := store.HybridSearch(projectID, args[0],
+				knowledge.SearchEmbedding(store, projectID, args[0]), searchConfig())
 			if err != nil {
 				return err
 			}
@@ -133,7 +134,8 @@ func searchScope(aiDir, projectID, scopeName, query string) error {
 		}
 		defer store.Close()
 
-		results, err := store.HybridSearch(projectID, query, nil, searchConfig())
+		results, err := store.HybridSearch(projectID, query,
+			knowledge.SearchEmbedding(store, projectID, query), searchConfig())
 		if err != nil {
 			return err
 		}
@@ -147,7 +149,8 @@ func searchScope(aiDir, projectID, scopeName, query string) error {
 	}
 	defer fs.Close()
 
-	results, err := fs.HybridSearch(projectID, query, nil, searchConfig())
+	results, err := fs.HybridSearch(projectID, query,
+		knowledge.SearchEmbedding(knowledge.EmbedSourceFor(fs), projectID, query), searchConfig())
 	if err != nil {
 		return err
 	}
@@ -176,7 +179,8 @@ func searchAllScopes(aiDir, projectID, query string) error {
 			continue
 		}
 
-		results, err := store.HybridSearch(projectID, query, nil, searchConfig())
+		results, err := store.HybridSearch(projectID, query,
+			knowledge.SearchEmbedding(store, projectID, query), searchConfig())
 		store.Close()
 
 		if err != nil {

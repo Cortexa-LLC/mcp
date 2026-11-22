@@ -344,8 +344,16 @@ func (s *Store) batchGetObservations(entityIDs []string, projectID string, limit
 // VectorSearch performs semantic search using an in-memory HNSW index.
 // The index is lazily built on the first call per project and invalidated
 // whenever SetEmbedding writes a new embedding, so results are always fresh.
-// Entities must have been previously embedded via SetEmbedding / BatchEmbed.
+// Entities and/or their observations must have been previously embedded via
+// SetEmbedding / SetObservationEmbedding / BatchEmbed.
 // Results are sorted by descending cosine similarity and capped at limit.
+//
+// The index holds a node per embedded observation as well as per embedded
+// entity (see buildIndex), so several neighbours routinely resolve to the same
+// entity — a document whose every section matched. Results are therefore
+// deduplicated by entity, keeping each entity's best-matching vector, and the
+// neighbour search over-fetches to compensate: asking HNSW for exactly limit
+// neighbours would return far fewer than limit distinct entities.
 func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit int) ([]*SearchResult, error) {
 	if len(queryEmbedding) == 0 {
 		return nil, fmt.Errorf("query embedding cannot be empty")
@@ -366,23 +374,56 @@ func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit i
 		return []*SearchResult{}, nil
 	}
 
-	// Search returns the k nearest neighbours sorted by ascending distance.
-	// Node.Value is the stored vector; we compute cosine similarity ourselves.
-	neighbours := idx.graph.Search(queryEmbedding, limit)
-
-	// Collect entity IDs and similarities from HNSW neighbours.
+	// Collect entities and similarities from the k nearest neighbours, keeping
+	// one candidate per entity: its best-matching vector. Without that, an
+	// entity with many embedded observations occupies most of the result page.
 	type candidate struct {
 		entity     *Entity
 		similarity float64
 	}
-	candidates := make([]candidate, 0, len(neighbours))
-	for _, node := range neighbours {
-		entity, ok := idx.entities[node.Key]
-		if !ok {
-			continue
+	collect := func(k int) []candidate {
+		// Search returns the k nearest neighbours sorted by ascending distance.
+		// Node.Value is the stored vector; cosine similarity is ours to compute.
+		neighbours := idx.graph.Search(queryEmbedding, k)
+		best := make(map[string]int, len(neighbours)) // entity ID → candidates index
+		out := make([]candidate, 0, len(neighbours))
+		for _, node := range neighbours {
+			entity, ok := idx.entities[node.Key]
+			if !ok {
+				continue
+			}
+			similarity := cosineSimilarity32(queryEmbedding, node.Value)
+			if i, seen := best[entity.ID]; seen {
+				if similarity > out[i].similarity {
+					out[i].similarity = similarity
+				}
+				continue
+			}
+			best[entity.ID] = len(out)
+			out = append(out, candidate{entity, similarity})
 		}
-		similarity := cosineSimilarity32(queryEmbedding, node.Value)
-		candidates = append(candidates, candidate{entity, similarity})
+		return out
+	}
+
+	// Observation nodes collapse onto their parent entity, so k neighbours yield
+	// strictly fewer than k distinct entities. A fixed over-fetch factor is not
+	// enough: a document with more embedded sections than the budget takes every
+	// slot and crowds every other match out of the page completely — the better
+	// the document matches, the more total the eviction. So widen the neighbour
+	// search until the page can be filled, or until it covers the whole graph.
+	// Measured against the index: a second entity ranked behind one document's
+	// sections is missed at k=8 and k=16 and found at k=32, at every graph size
+	// tried — and raising HNSW's EfSearch instead changed nothing, so the
+	// neighbour count is the lever and the candidate-list size is not. Widening
+	// stops at the graph size, past which there is nothing left to find; a page
+	// can still under-fill when one document owns the whole neighbourhood, which
+	// is an inherent limit of approximate search rather than a tuning problem.
+	const vectorOverfetch = 4
+	k := limit * vectorOverfetch
+	candidates := collect(k)
+	for len(candidates) < limit && k < idx.nodeCount {
+		k *= 2
+		candidates = collect(k)
 	}
 
 	// Batch-fetch observations for all candidate entities in a single query.
@@ -415,6 +456,12 @@ func (s *Store) VectorSearch(projectID string, queryEmbedding []float32, limit i
 		return results[i].Score > results[j].Score
 	})
 	rankResults(results, defaultVisibilityPenalty)
+
+	// The over-fetch above is an implementation detail of hitting the target,
+	// not a licence to return more than was asked for.
+	if len(results) > limit {
+		results = results[:limit]
+	}
 
 	return results, nil
 }
@@ -451,9 +498,13 @@ func (s *Store) HybridSearch(projectID, query string, queryEmbedding []float32, 
 		return nil, fmt.Errorf("either query or embedding must be provided")
 	}
 
-	// Use default config if not provided
+	// Fill in an unset limit without discarding the rest of the config. The
+	// whole struct used to be replaced here, which silently dropped
+	// config.Filter — so a caller that set PublicOnly but left Limit at zero
+	// got an unfiltered search. Only the limit is missing; only the limit is
+	// supplied.
 	if config.Limit == 0 {
-		config = DefaultSearchConfig()
+		config.Limit = DefaultSearchConfig().Limit
 	}
 	if config.Now.IsZero() {
 		config.Now = time.Now().UTC()

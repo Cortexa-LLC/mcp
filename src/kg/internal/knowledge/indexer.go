@@ -484,7 +484,7 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 			}
 			stats.FilesScanned++
 		} else if ext == ".md" {
-			if err := idx.processMarkdownFile(path, relPath, &entities, seenEntities, &relations, stats); err != nil {
+			if err := idx.processMarkdownFile(path, relPath, &entities, seenEntities, &relations, &observations, stats); err != nil {
 				fmt.Printf("Warning: Failed to process %s: %v\n", relPath, err)
 				stats.Errors++
 			}
@@ -558,7 +558,7 @@ func (idx *Indexer) Index() (*IndexStats, error) {
 		return nil, fmt.Errorf("batch create relations: %w", err)
 	}
 
-	// Batch create observations (PDF text chunks, etc.)
+	// Batch create observations (PDF text chunks, markdown section prose, etc.)
 	if err := idx.batchCreateObservations(observations); err != nil {
 		return nil, fmt.Errorf("batch create observations: %w", err)
 	}
