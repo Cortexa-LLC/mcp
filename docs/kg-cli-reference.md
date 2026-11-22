@@ -792,8 +792,9 @@ Requires `OPENAI_API_KEY` or `OLLAMA_HOST`, and fails with a non-zero exit if
 neither is set. Without embeddings, search falls back to keyword matching.
 
 The embedding columns are fixed at `FLOAT[1536]`, which is the width of
-OpenAI's `text-embedding-3-small` and `text-embedding-3-large` is not; a model
-of any other width is rejected on write by the database.
+OpenAI's `text-embedding-3-small`. `text-embedding-3-large` defaults to 3072
+and `nomic-embed-text` to 768, so neither is usable: a model of any other
+width is rejected on write by the database.
 
 ---
 

@@ -109,13 +109,23 @@ everything below it is unreleased.
   resolving to their parent entity; writing one invalidates the index, which it did not
   before. Results are deduplicated per entity and the neighbour search widens until the
   page fills, so one long document cannot evict every other match.
-- The vector index is seeded deterministically. `hnsw.NewGraph` seeds level generation
-  from the wall clock and the index is rebuilt per process, so identical queries against
-  an unchanged graph could return different hits — observed diverging between two runs
-  over the same 221 vectors.
+- The vector index is seeded deterministically, and built in a fixed order.
+  `hnsw.NewGraph` seeds level generation from the wall clock and the index is rebuilt per
+  process, so identical queries against an unchanged graph could return different hits —
+  observed diverging between two runs over the same 221 vectors. HNSW connectivity also
+  depends on the order vectors arrive in, so the index-build queries now `ORDER BY` a
+  stable key; the seed alone would not have settled the shape.
 - `HybridSearch` no longer discards the caller's `SearchFilter` when `Limit` is unset: it
   replaced the whole config with the default, so a `--public-only` search with no limit
   came back unfiltered.
+- **`--public-only` now holds on the vector path too.** The keyword half enforced it in
+  the Cypher `WHERE` clause, but vector results were folded into the merge unfiltered and
+  ranking only *demotes* a private entity by a score penalty rather than excluding it —
+  so a `--public-only` or `public_only: true` search could return private symbols that
+  ranked well semantically. Unreachable before this release, because the nil query
+  embedding made that branch dead code; activating semantic search would have made it
+  live. The exclusion happens inside the neighbour search, so dropped entities do not
+  consume slots on the result page.
 - `kg embed`'s help and the CLI reference both claimed indexing embeds as it goes. It
   does not — `kg embed` is the only writer of vectors, so a freshly indexed project had
   none and semantic search could never engage.

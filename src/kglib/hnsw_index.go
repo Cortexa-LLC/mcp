@@ -32,9 +32,14 @@ type projectIndex struct {
 	builtAt   time.Time
 }
 
-// hnswSeed fixes the level-generation RNG so an index built twice from the
-// same vectors has the same shape, and a query against it returns the same
-// results.
+// hnswSeed fixes the level-generation RNG, which is one of the two inputs to
+// an index's shape. The other is insertion order: HNSW connectivity depends on
+// the sequence vectors arrive in, so a fixed seed alone would not make a
+// rebuild reproducible if Kuzu yielded the build rows in a different order
+// between processes. buildIndex and addObservationVectors therefore ORDER BY
+// a stable key (e.id, o.id). Seed plus insertion order together are what make
+// an index built twice from the same vectors have the same shape, and a query
+// against it return the same results.
 //
 // hnsw.NewGraph seeds from time.Now().UnixNano(). The index is in-memory and
 // lazily rebuilt, so every process gets a different graph shape from identical
@@ -122,6 +127,7 @@ func (s *Store) buildIndex(projectID string) (*projectIndex, error) {
 		MATCH (e:Entity)
 		WHERE e.project_id = $project_id AND e.embedding IS NOT NULL
 		RETURN `+s.entityColumns()+`, e.embedding
+		ORDER BY e.id
 	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return nil, fmt.Errorf("query entities for index build: %w", err)
@@ -228,6 +234,7 @@ func (s *Store) addObservationVectors(
 		MATCH (e:Entity)-[:HAS_OBSERVATION]->(o:Observation)
 		WHERE e.project_id = $project_id AND o.embedding IS NOT NULL
 		RETURN `+s.entityColumns()+`, o.id, o.embedding
+		ORDER BY o.id
 	`, map[string]any{"project_id": projectID})
 	if err != nil {
 		return 0, 0, fmt.Errorf("query observations for index build: %w", err)

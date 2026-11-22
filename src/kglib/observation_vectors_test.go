@@ -293,3 +293,118 @@ func TestVectorSearch_RespectsLimit(t *testing.T) {
 		t.Errorf("got %d results for limit 2", len(results))
 	}
 }
+
+// TestHybridSearch_PublicOnlyExcludesPrivateVectorMatches is the regression
+// test for the access-control hole the vector path opened once HybridSearch
+// started being called with a real query embedding.
+//
+// Before that, every call site passed a nil embedding, so the vector branch
+// never ran and nothing noticed that VectorSearch takes no SearchFilter: the
+// keyword leg enforces PublicOnly in Cypher, and rankResults only demotes
+// private entities by a score penalty rather than dropping them, so a private
+// entity reached through the vector leg was merged into the result set and
+// handed to a --public-only caller.
+//
+// The query is embedding-only (no keyword term), so the keyword leg cannot
+// supply or filter anything: whatever comes back came through the vector path.
+func TestHybridSearch_PublicOnlyExcludesPrivateVectorMatches(t *testing.T) {
+	store := setupTestStore(t)
+	defer store.Close()
+
+	const pid = "p"
+	query := unitVec(0)
+
+	// The strongest match in the graph is private — the case a score penalty
+	// cannot handle, because relevance is supposed to beat the penalty.
+	priv, err := store.CreateEntity("internalEmbedder", "function", pid)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := setVisibility(store, priv.ID, VisibilityPrivate); err != nil {
+		t.Fatalf("setVisibility: %v", err)
+	}
+	if err := store.SetEmbedding(priv.ID, pid, unitVec(0)); err != nil {
+		t.Fatalf("SetEmbedding: %v", err)
+	}
+
+	// A public match, further from the query but still clearly a match, so a
+	// filtered page is not simply empty.
+	pub, err := store.CreateEntity("ExportedEmbedder", "function", pid)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := setVisibility(store, pub.ID, VisibilityPublic); err != nil {
+		t.Fatalf("setVisibility: %v", err)
+	}
+	if err := store.SetEmbedding(pub.ID, pid, unitVec(0.3)); err != nil {
+		t.Fatalf("SetEmbedding: %v", err)
+	}
+
+	// Empty visibility is not private: hand-written knowledge and files have
+	// no API surface to be outside of, and the skip must not swallow them.
+	note, err := store.CreateEntity("docs/embedding-notes.md", "file", pid)
+	if err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	noteObs, err := store.CreateObservation(note.ID, "how the embedder is wired", pid)
+	if err != nil {
+		t.Fatalf("CreateObservation: %v", err)
+	}
+	if err := store.SetObservationEmbedding(noteObs.ID, pid, unitVec(0.6)); err != nil {
+		t.Fatalf("SetObservationEmbedding: %v", err)
+	}
+
+	filtered, err := store.HybridSearch(pid, "", query,
+		SearchConfig{Filter: SearchFilter{PublicOnly: true}})
+	if err != nil {
+		t.Fatalf("HybridSearch (public-only): %v", err)
+	}
+
+	for _, r := range filtered {
+		if r.Entity.Visibility == VisibilityPrivate {
+			t.Errorf("public-only hybrid search returned the private entity %q "+
+				"(score %.3f) — the vector path bypassed PublicOnly; page was %v",
+				r.Entity.Name, r.Score, namesWithVisibility(filtered))
+		}
+	}
+	if !containsEntity(filtered, pub.ID) {
+		t.Errorf("the public vector match is missing from the public-only page %v",
+			namesWithVisibility(filtered))
+	}
+	if !containsEntity(filtered, note.ID) {
+		t.Errorf("the entity with empty visibility was dropped from the public-only "+
+			"page %v; empty visibility must rank and filter as public",
+			namesWithVisibility(filtered))
+	}
+
+	// The other half of the guard: unfiltered, the private entity IS reachable
+	// through the vector path. Without this, the assertions above would pass on
+	// a fixture where approximate search never found it at all, and the test
+	// would guarantee nothing.
+	unfiltered, err := store.HybridSearch(pid, "", query, SearchConfig{})
+	if err != nil {
+		t.Fatalf("HybridSearch (unfiltered): %v", err)
+	}
+	if !containsEntity(unfiltered, priv.ID) {
+		t.Fatalf("the private entity is unreachable through the vector path even "+
+			"unfiltered (page was %v); the fixture proves nothing about the filter",
+			namesWithVisibility(unfiltered))
+	}
+}
+
+func namesWithVisibility(results []*SearchResult) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, fmt.Sprintf("%s(visibility=%q)", r.Entity.Name, r.Entity.Visibility))
+	}
+	return out
+}
+
+func containsEntity(results []*SearchResult, id string) bool {
+	for _, r := range results {
+		if r.Entity != nil && r.Entity.ID == id {
+			return true
+		}
+	}
+	return false
+}
