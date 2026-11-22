@@ -27,6 +27,9 @@ const (
 	// FormatJSON renders the Subgraph itself, for scripts and for callers
 	// that want to lay the graph out themselves.
 	FormatJSON GraphFormat = "json"
+	// FormatHTML renders a self-contained interactive page: the same
+	// Subgraph, laid out in the browser so the reader can steer it.
+	FormatHTML GraphFormat = "html"
 )
 
 // ParseGraphFormat validates a --format flag value.
@@ -38,8 +41,10 @@ func ParseGraphFormat(s string) (GraphFormat, error) {
 		return FormatDOT, nil
 	case FormatJSON:
 		return FormatJSON, nil
+	case FormatHTML:
+		return FormatHTML, nil
 	default:
-		return "", fmt.Errorf("unknown format %q: want mermaid, dot, or json", s)
+		return "", fmt.Errorf("unknown format %q: want mermaid, dot, json, or html", s)
 	}
 }
 
@@ -56,6 +61,8 @@ func RenderGraph(sub Subgraph, format GraphFormat) (string, error) {
 			return "", fmt.Errorf("encode graph: %w", err)
 		}
 		return string(out) + "\n", nil
+	case FormatHTML:
+		return RenderHTML(sub)
 	default:
 		return "", fmt.Errorf("unknown format %q", format)
 	}

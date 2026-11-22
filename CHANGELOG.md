@@ -15,6 +15,11 @@ everything below it is unreleased.
   `--depth`, `--type`, and `--limit`. (#5)
 - **`kg graph --federated`** — one graph across a scope and every local layer it
   federates with, grouped into a subgraph per layer. (#6)
+- **`kg graph --format html`** — a self-contained interactive page for the same
+  neighbourhood the other formats draw: drag, zoom, click a node to isolate its
+  neighbourhood, filter by name or entity type. Carries no external references,
+  so it works offline and under a strict script-src policy, and its output is
+  deterministic like the other formats.
 - **Cross-layer entity linking** for `kg graph --federated`: derived `DEPENDS_ON` edges
   are resolved from imports to the packages they name, replacing the `(name, type)`
   join that manufactured edges nobody recorded. `--join-types` and `--no-derived`

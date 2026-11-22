@@ -348,6 +348,8 @@ func TestParseGraphFormat(t *testing.T) {
 		{in: "Mermaid", want: FormatMermaid},
 		{in: "dot", want: FormatDOT},
 		{in: "json", want: FormatJSON},
+		{in: "html", want: FormatHTML},
+		{in: "HTML", want: FormatHTML},
 		{in: "svg", wantErr: true},
 	} {
 		got, err := ParseGraphFormat(tc.in)
