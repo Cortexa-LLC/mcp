@@ -201,6 +201,31 @@ kg graph --type file,package --limit 60          # whole graph, structure only
 kg graph --format dot | dot -Tsvg -o graph.svg   # render an image
 kg graph --scope platform -o platform.mmd        # one scope, to a file
 kg graph --personal --format json                # personal store, machine-readable
+kg graph --root Store --format html -o kg.html   # interactive page
+```
+
+#### `--format html`
+
+A self-contained interactive page: the same neighbourhood the other formats
+draw, laid out in the browser so it can be steered. Drag a node, scroll to
+zoom, click one to isolate its immediate neighbourhood, filter by name, or
+switch an entity type off in the legend. Hovering a node reports its type,
+depth from `--root`, relation count, and — in a `--federated` render — which
+layers it came from.
+
+The file carries no external references: no CDN, no network at view time, so it
+keeps working offline and inside a repository that forbids third-party script
+origins. A 200-node graph is roughly 80 KB. Like the other formats the output
+is deterministic, so a committed page only changes when the graph does.
+
+```bash
+kg graph --root Store --depth 2 --format html -o kg.html
+open kg.html
+```
+
+Labels are drawn for every node in a graph under 140 nodes; above that, for the
+root and for hubs, with the rest on hover. Nodes are sized by relation count
+and coloured by entity type.
 ```
 
 **Start from a `--root`.** Without one the whole graph is rendered, and for a real
@@ -225,7 +250,7 @@ Error: "main" matches 2 entities — use an ID instead:
 | `--root`, `-r` | *(whole graph)* | Entity ID or name to centre on |
 | `--depth`, `-d` | `2` | Hops to follow from `--root` |
 | `--direction` | `both` | `out` = what this depends on, `in` = what depends on this |
-| `--format`, `-f` | `mermaid` | `mermaid`, `dot`, or `json` |
+| `--format`, `-f` | `mermaid` | `mermaid`, `dot`, `json`, or `html` |
 | `--type` | *(all)* | Only these entity types; `--root` is always kept |
 | `--rel` | *(all)* | Only follow these relation types |
 | `--limit` | `200` | Maximum nodes; `0` for no limit |
