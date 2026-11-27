@@ -607,8 +607,9 @@ func (s *Server) handleSeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing required header X-KG-Commit")
 		return
 	}
-	// The commit becomes a path component (graphs/<name>/<commit>/) and the
-	// `current` symlink target — never join it unvalidated.
+	// The commit becomes a path component (graphs/<name>/<commit>/), and the
+	// registry entry every later read resolves that path from — never join it
+	// unvalidated.
 	if !validPathComponent(commit) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid X-KG-Commit %q: must match %s and not be . or ..", commit, graphNameRE.String()))
 		return
