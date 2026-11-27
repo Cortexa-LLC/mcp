@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,10 +13,14 @@ import (
 func TestProjectIDFromCwdReplacesSeparator(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "weird\x1fname")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
 
+	// The directory is deliberately not created. Windows rejects control
+	// characters 0x01-0x1F in a filename, so Mkdir here failed with "The
+	// filename, directory name, or volume label syntax is incorrect" and the
+	// assertion below never ran. It does not need to exist: projectIDFromCwd
+	// derives the id from the path string, and findProjectRoot falls back to
+	// the path as-is once it finds no marker above it — which is just as true
+	// of a directory that is absent as of an empty one.
 	got := projectIDFromCwd(dir)
 
 	if strings.ContainsRune(got, pkSeparator) {

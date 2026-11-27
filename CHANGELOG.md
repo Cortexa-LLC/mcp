@@ -43,6 +43,23 @@ everything below it is unreleased.
 
 ### Fixed
 
+- **Windows builds.** Both servers now build, install, and run on Windows, which had
+  never been built there before. Four things were in the way:
+  - `github.com/coder/hnsw` calls `renameio.TempFile`, but `github.com/google/renameio`
+    guards every file with a `!windows` constraint in v1 and v2 alike, so `kglib` would
+    not compile at all. `src/renameio-compat` stands in for it through a `replace`
+    directive, mirroring upstream's semantics so macOS and Linux behaviour is unchanged.
+  - Every `COPY ... FROM '<path>'` bulk load failed to parse on Windows, because Kuzu
+    reads the backslashes in a native path as string escapes. Indexing still produced a
+    correct graph — it fell back to row-by-row inserts — but silently gave up the bulk
+    loader. Paths are now rendered with `cypherPathLiteral`.
+  - `install.py` now copies `kuzu_shared.dll` beside `kg.exe`. Kuzu links dynamically on
+    Windows, which has no rpath to fall back on, so the installed binary exited at
+    startup with `kuzu_shared.dll: cannot open shared object file`.
+  - The MCP config snippet `install.py` prints is built with `json.dumps`, so Windows
+    paths come out as valid JSON instead of unescaped `C:\Users\...`.
+- **`markitdown` binary name** in `install.py` and the README caught up with the
+  `markitdown-mcp` → `markitdown` rename.
 - **`kg index` no longer destroys hand-written knowledge.** Hand-writes are journalled
   and replayed after indexing.
 - **Security:** Cypher and repository config could escape the filesystem sandbox; both

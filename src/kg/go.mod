@@ -8,6 +8,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
+	github.com/kuzudb/go-kuzu v0.11.3
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
@@ -16,7 +17,6 @@ require (
 
 require (
 	github.com/coder/hnsw v0.6.1 // indirect
-	github.com/kuzudb/go-kuzu v0.11.3 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 )
@@ -39,3 +39,5 @@ require (
 )
 
 replace github.com/cortexa-llc/mcp/kglib => ../kglib
+
+replace github.com/google/renameio => ../renameio-compat

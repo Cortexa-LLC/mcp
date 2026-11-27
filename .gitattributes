@@ -1,0 +1,45 @@
+# Line endings: LF everywhere, in the repository and in the working tree, on
+# every platform. Editors are configured to match via .editorconfig.
+#
+# `eol=lf` is what makes this hold on Windows. Without it, a clone with
+# core.autocrlf=true — the Windows default, and set globally on at least one
+# machine here — checks every text file out with CRLF. That is a lossless
+# round-trip as far as Git is concerned, but it breaks tools that are not:
+# gofmt only accepts LF, so `gofmt -l .` flagged all 173 Go files on a Windows
+# checkout while CI passed on Linux. Makefiles and the Dockerfile in this repo
+# are LF-sensitive for the same kind of reason.
+#
+# These attributes take precedence over core.autocrlf, so nobody has to change
+# their global Git configuration for this repository to behave consistently.
+* text=auto eol=lf
+
+# Binary: never translate, on any platform.
+#
+# This half is not cosmetic. Git decides text-vs-binary by heuristic — roughly
+# "no NUL byte early in the file" — and a PDF can pass that test.
+# src/markitdown/converter/testdata/minimal.pdf did, so it was checked out 36
+# bytes longer than the committed blob, which shifted every offset in its
+# cross-reference table and failed the converter tests with "malformed PDF:
+# cross-reference table not found" on Windows only. Fixtures are embedded with
+# go:embed and compared byte-for-byte, so they must arrive exactly as committed.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.docx binary
+*.xlsx binary
+*.xls binary
+*.pptx binary
+*.zip binary
+*.gz binary
+*.db binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.lib binary
+*.exe binary
+*.ttf binary
+*.woff binary
+*.woff2 binary

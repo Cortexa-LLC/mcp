@@ -329,7 +329,7 @@ func bulkLoadExecEntities(store *Store, entities []entityRecord) error {
 	f.Close()
 
 	result, err := store.Query(fmt.Sprintf(
-		`COPY Entity(pk, id, name, type, project_id, created_at, updated_at) FROM '%s'`, path,
+		`COPY Entity(pk, id, name, type, project_id, created_at, updated_at) FROM '%s'`, cypherPathLiteral(path),
 	))
 	if err != nil {
 		// Fall back to row-by-row MERGE (idempotent on pk) if COPY FROM JSON is
@@ -406,14 +406,14 @@ func bulkLoadExecObservations(store *Store, obs []obsRecord) error {
 	ef.Close()
 
 	r, err := store.Query(fmt.Sprintf(
-		`COPY Observation(pk, id, entity_id, content, created_at) FROM '%s'`, nodesPath,
+		`COPY Observation(pk, id, entity_id, content, created_at) FROM '%s'`, cypherPathLiteral(nodesPath),
 	))
 	if err != nil {
 		return fmt.Errorf("COPY Observation: %w", err)
 	}
 	r.Close()
 
-	r, err = store.Query(fmt.Sprintf(`COPY HAS_OBSERVATION FROM '%s'`, edgesPath))
+	r, err = store.Query(fmt.Sprintf(`COPY HAS_OBSERVATION FROM '%s'`, cypherPathLiteral(edgesPath)))
 	if err != nil {
 		return fmt.Errorf("COPY HAS_OBSERVATION: %w", err)
 	}

@@ -1,0 +1,34 @@
+# Editor settings for this repository. See https://editorconfig.org — supported
+# natively by GoLand, VS Code (with the EditorConfig extension), Vim, Emacs and
+# others, so an editor enforces this without anyone configuring it per machine.
+#
+# The companion to .gitattributes: Git guarantees LF on checkout and in the
+# repository, and this keeps an editor from reintroducing CRLF when it saves a
+# file. Both halves are needed — Git does not police writes.
+
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+trim_trailing_whitespace = true
+
+# Go is tab-indented, and gofmt is the authority on the rest.
+[*.go]
+indent_style = tab
+
+# Recipe lines must begin with a literal tab.
+[Makefile]
+indent_style = tab
+
+[*.{json,yml,yaml,md,py,html,css,js,ts}]
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+# Trailing whitespace is significant in Markdown: two spaces force a line break.
+[*.md]
+trim_trailing_whitespace = false

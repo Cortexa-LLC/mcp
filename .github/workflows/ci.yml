@@ -73,3 +73,40 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+  # src/renameio-compat is a fourth module, kept out of the matrix above because
+  # it has no dependencies and therefore no go.sum for setup-go's cache to
+  # resolve. It stands in for github.com/google/renameio in kglib and kg on
+  # every platform, not just Windows, so a break here breaks both of them.
+  renameio-compat:
+    name: renameio-compat
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src/renameio-compat
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: src/renameio-compat/go.mod
+
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error title=gofmt::run 'gofmt -w' on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
