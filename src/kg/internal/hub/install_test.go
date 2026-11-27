@@ -1,7 +1,9 @@
 package hub
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,9 +17,10 @@ import (
 )
 
 // buildFixtureDBFor builds a fixture database that answers for a caller-chosen
-// project. The project ID matters here: the hub searches the database under
-// `current` using the ProjectID recorded in the registry, so a graph whose
-// registry entry and installed database disagree returns nothing at all.
+// project. The project ID matters here: the hub resolves the database from the
+// commit recorded in the registry and searches it with that entry's ProjectID,
+// so a graph whose registry entry and installed database disagree returns
+// nothing at all.
 func buildFixtureDBFor(t *testing.T, entityName, projectID, commit string) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "knowledge.db")
@@ -75,6 +78,22 @@ func searchNames(t *testing.T, hubURL, graph, query string) (names []string, com
 		}
 	}
 	return names, out.Commit
+}
+
+// registeredCommit returns the commit registry.json records for a graph. That
+// is the hub's only record of which commit is live, and what the database path
+// is derived from, so it is what these tests assert against.
+func registeredCommit(t *testing.T, dataDir, graph string) string {
+	t.Helper()
+	reg, err := loadRegistry(dataDir)
+	if err != nil {
+		t.Fatalf("loadRegistry: %v", err)
+	}
+	info, ok := reg.graph(graph)
+	if !ok {
+		t.Fatalf("registry has no entry for %q", graph)
+	}
+	return info.Commit
 }
 
 func contains(names []string, want string) bool {
@@ -145,12 +164,18 @@ func TestRegistryWriteFailureLeavesGraphUnchanged(t *testing.T) {
 	}
 }
 
-// A hard kill between install's two renames — `current` repointed, registry
-// not yet written — leaves search reading one commit's database with another
-// commit's ProjectID: HTTP 200 with zero results, permanently. Construction
-// reconciles: the registry write is the commit point, so `current` rolls
-// back to the registered commit and the graph answers again.
-func TestReconcileRollsBackInterruptedSeed(t *testing.T) {
+// A hard kill mid-install — the new commit's directory moved into place, the
+// registry not yet written — used to leave a repointed `current` naming a
+// commit the registry never recorded, so search read one commit's database
+// with another commit's ProjectID: HTTP 200 with zero results, permanently.
+//
+// With the registry as the only record of which commit is live, that state is
+// unreachable. The orphaned directory is inert: the registered commit still
+// names the database that was serving before the crash, so the graph keeps
+// answering with no repair pass involved. Reconciliation deliberately leaves
+// the orphan alone — deleting data is not a job for a constructor — and the
+// next successful install's prune collects it.
+func TestInterruptedSeedKeepsServingRegisteredCommit(t *testing.T) {
 	dataDir := t.TempDir()
 	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
 
@@ -164,65 +189,81 @@ func TestReconcileRollsBackInterruptedSeed(t *testing.T) {
 	}
 	ts.Close()
 
-	// Simulate the crash: a new commit directory exists and `current` points
-	// at it, but the process died before the registry recorded it. The empty
-	// directory doubles as a tripwire — if reconciliation does not roll back,
-	// the search below fails against the missing database rather than
-	// silently passing.
+	// Simulate the crash: a new commit's directory exists, but the process died
+	// before the registry recorded it. The directory is left empty on purpose —
+	// it is a tripwire. If anything resolved the database from the newest
+	// directory on disk rather than from the registry, the search below would
+	// fail against a missing database instead of silently passing.
 	gdir := filepath.Join(dataDir, "graphs", "recon")
 	orphan := strings.Repeat("b", 40)
 	if err := os.MkdirAll(filepath.Join(gdir, orphan), 0o755); err != nil {
 		t.Fatalf("create orphan commit dir: %v", err)
-	}
-	if err := replaceSymlink(gdir, filepath.Join(gdir, "current"), orphan); err != nil {
-		t.Fatalf("repoint current: %v", err)
 	}
 
 	// Restart the hub over the same data dir.
 	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
 	defer ts2.Close()
 
-	if target, err := os.Readlink(filepath.Join(gdir, "current")); err != nil || target != commit {
-		t.Errorf("current -> %q (err %v), want rolled back to %q", target, err, commit)
+	if got := registeredCommit(t, dataDir, "recon"); got != commit {
+		t.Errorf("registered commit = %q, want the pre-crash %q", got, commit)
 	}
 	names, gotCommit := searchNames(t, ts2.URL, "recon", "ReconcileEntity")
 	if len(names) == 0 || names[0] != "ReconcileEntity" {
-		t.Errorf("search after reconcile = %v, want [ReconcileEntity]", names)
+		t.Errorf("search after restart = %v, want [ReconcileEntity]", names)
 	}
 	if gotCommit != commit {
 		t.Errorf("served commit = %q, want %q", gotCommit, commit)
 	}
+	if _, err := os.Stat(filepath.Join(gdir, orphan)); err != nil {
+		t.Errorf("orphaned commit directory was removed at startup (%v); prune owns that, not reconcile", err)
+	}
 }
 
-// A `current` symlink that is missing entirely — a partial copy, a restored
-// backup, an operator — is state the hub did not create, and leaving it
-// unrepaired is strictly worse than the split reconcile exists to fix: every
-// search 500s, permanently. The registry knows the answer, so construction
-// recreates the link.
-func TestReconcileRestoresMissingCurrent(t *testing.T) {
+// A registry entry whose commit directory is absent — a partial copy, a
+// restored backup, an operator with a delete key — is the one inconsistency
+// reconciliation can still see and cannot fix. It must be reported at startup
+// rather than discovered one failed search at a time, and it must not stop the
+// hub from serving the graphs that are intact.
+//
+// This replaced a test for a missing `current` symlink, which the registry-only
+// layout makes unrepresentable.
+func TestReconcileReportsMissingCommitDirectory(t *testing.T) {
 	dataDir := t.TempDir()
 	ts := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
 
 	commit := strings.Repeat("c", 40)
-	dbPath := buildFixtureDBFor(t, "MissingCurrentEntity", "proj-mc", commit)
+	dbPath := buildFixtureDBFor(t, "MissingDirEntity", "proj-mc", commit)
 	if err := pushFixtureFor(t, ts.URL, "mc", dbPath, commit, "proj-mc"); err != nil {
 		t.Fatalf("push fixture: %v", err)
 	}
+
+	intact := strings.Repeat("d", 40)
+	intactDB := buildFixtureDBFor(t, "IntactEntity", "proj-ok", intact)
+	if err := pushFixtureFor(t, ts.URL, "ok", intactDB, intact, "proj-ok"); err != nil {
+		t.Fatalf("push intact fixture: %v", err)
+	}
 	ts.Close()
 
-	gdir := filepath.Join(dataDir, "graphs", "mc")
-	if err := os.Remove(filepath.Join(gdir, "current")); err != nil {
-		t.Fatalf("remove current: %v", err)
+	if err := os.RemoveAll(filepath.Join(dataDir, "graphs", "mc", commit)); err != nil {
+		t.Fatalf("remove commit directory: %v", err)
 	}
 
+	// reconcileInstalls runs in the constructor and reports through the log.
+	var logged bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logged)
 	ts2 := httptest.NewServer(NewServer(dataDir, "", "s3cret", "dev").Handler())
+	log.SetOutput(prev)
 	defer ts2.Close()
 
-	if target, err := os.Readlink(filepath.Join(gdir, "current")); err != nil || target != commit {
-		t.Fatalf("current -> %q (err %v), want restored to %q", target, err, commit)
+	out := logged.String()
+	if !strings.Contains(out, "mc") || !strings.Contains(out, "missing") {
+		t.Errorf("startup log does not report the missing directory for %q:\n%s", "mc", out)
 	}
-	if names, _ := searchNames(t, ts2.URL, "mc", "MissingCurrentEntity"); len(names) == 0 {
-		t.Error("graph does not answer after restoring a missing current symlink")
+
+	// The damaged graph must not take the healthy one down with it.
+	if names, _ := searchNames(t, ts2.URL, "ok", "IntactEntity"); !contains(names, "IntactEntity") {
+		t.Errorf("intact graph = %v, want it still served alongside a damaged one", names)
 	}
 }
 
