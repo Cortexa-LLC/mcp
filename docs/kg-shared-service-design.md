@@ -541,7 +541,7 @@ Three distinct migration concerns, with different answers:
   a repo with no scopes) and `<repo>.<scope>` otherwise, with `<repo>` taken from the git
   remote. Repo names are unique within a GitHub org by construction, and a hub serves one
   org, so no owner segment is needed. The default scope keeps the bare name so a
-  single-project meta-repo stays `depop` and adding a second scope later does not rename
+  single-project meta-repo stays `acme` and adding a second scope later does not rename
   the first one's graph.
 
   Separator is `.`, not the `/` this question originally proposed: graph names become

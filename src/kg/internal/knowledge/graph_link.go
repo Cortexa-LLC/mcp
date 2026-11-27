@@ -14,8 +14,8 @@ import (
 //
 // A dependency is recoverable without inventing anything, because the indexers
 // already record both ends: layer A holds an `import` entity naming
-// com.depop.auth.client.AuthClient, and layer B holds a `package` entity named
-// com.depop.auth.client. That is a real edge, and it is a relation rather than
+// com.acme.auth.client.AuthClient, and layer B holds a `package` entity named
+// com.acme.auth.client. That is a real edge, and it is a relation rather than
 // an identity, so it is drawn as one and marked derived.
 //
 // Measured on a 61-layer estate: exact name matching finds 71 cross-layer
@@ -24,7 +24,7 @@ import (
 // ones, and they read as a dependency map. See docs/kg-graph-linking-design.md.
 
 // minPackageSegments is how specific a package name must be before an import
-// may resolve to it. Without a floor, "com.depop" claims every JVM import in
+// may resolve to it. Without a floor, "com.acme" claims every JVM import in
 // the estate and the graph gains one hub node instead of a dependency map.
 const minPackageSegments = 3
 
@@ -155,13 +155,13 @@ func packageIndex(g *Graph) map[string]*packageTarget {
 
 // resolvePackage finds the longest package name that prefixes importName,
 // returning the name and its target. Longest-first means
-// com.depop.auth.client beats com.depop.auth, which is the specific answer.
+// com.acme.auth.client beats com.acme.auth, which is the specific answer.
 //
 // The loop starts at len(parts), not len(parts)-1: a string is a prefix of
 // itself, and an import equal to a package name is the ordinary shape of a
 // Java wildcard import. extractImportPath keeps only the scoped_identifier and
-// drops the trailing asterisk, so `import com.depop.auth.client.*;` arrives as
-// "com.depop.auth.client" — exactly the package name. Testing only proper
+// drops the trailing asterisk, so `import com.acme.auth.client.*;` arrives as
+// "com.acme.auth.client" — exactly the package name. Testing only proper
 // prefixes dropped every one of those silently. (Kotlin escaped it by accident:
 // its extractor keeps the ".*" verbatim, leaving a longer string.)
 func resolvePackage(importName string, targets map[string]*packageTarget) (string, *packageTarget) {

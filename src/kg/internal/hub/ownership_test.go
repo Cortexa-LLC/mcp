@@ -8,12 +8,12 @@ import (
 
 // A hub namespace is shared by every repo pushing to it, and graph names can be
 // overridden by hand. Without an ownership check, a name collision silently
-// replaces another team's graph — they lose their knowledge and nothing says so.
+// replaces anacme-two team's graph — they lose their knowledge and nothing says so.
 func TestSeedRefusesPushFromADifferentRepo(t *testing.T) {
 	ts, _ := newTestHub(t, "", "s3cret", "dev")
 
 	first := rawSeed(t, ts.URL, "platform", "abc123", map[string]string{
-		"X-KG-Repo":    "github.com/Cortexa-LLC/depop",
+		"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
 		"X-KG-Version": "dev",
 	})
 	// The body is empty, so staging fails — the registry entry is what matters
@@ -39,7 +39,7 @@ func TestGraphOwnershipAcrossPushes(t *testing.T) {
 		t.Fatalf("loadRegistry: %v", err)
 	}
 	info := reg.Graphs["platform"]
-	info.Repo = "github.com/Cortexa-LLC/depop"
+	info.Repo = "github.com/Cortexa-LLC/acme"
 	reg.Graphs["platform"] = info
 	if err := saveRegistry(dataDir, reg); err != nil {
 		t.Fatalf("saveRegistry: %v", err)
@@ -47,7 +47,7 @@ func TestGraphOwnershipAcrossPushes(t *testing.T) {
 
 	// The same repo may push again.
 	resp := rawSeed(t, ts.URL, "platform", "def456", map[string]string{
-		"X-KG-Repo":    "github.com/Cortexa-LLC/depop",
+		"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
 		"X-KG-Version": "dev",
 	})
 	if resp.StatusCode == http.StatusConflict {
@@ -56,7 +56,7 @@ func TestGraphOwnershipAcrossPushes(t *testing.T) {
 
 	// A different one may not.
 	resp = rawSeed(t, ts.URL, "platform", "def456", map[string]string{
-		"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
+		"X-KG-Repo":    "github.com/Cortexa-LLC/acme-two",
 		"X-KG-Version": "dev",
 	})
 	if resp.StatusCode != http.StatusConflict {
@@ -66,7 +66,7 @@ func TestGraphOwnershipAcrossPushes(t *testing.T) {
 
 	// Unless it says so explicitly, for a repo that really was renamed.
 	resp = rawSeed(t, ts.URL, "platform", "def456", map[string]string{
-		"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
+		"X-KG-Repo":    "github.com/Cortexa-LLC/acme-two",
 		"X-KG-Force":   "1",
 		"X-KG-Version": "dev",
 	})
@@ -117,7 +117,7 @@ func TestSeedDoesNotDeadlockOnOwnershipCheck(t *testing.T) {
 	go func() {
 		defer close(done)
 		rawSeed(t, ts.URL, "graph", "abc123", map[string]string{
-			"X-KG-Repo":    "github.com/Cortexa-LLC/depop",
+			"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
 			"X-KG-Version": "dev",
 		})
 	}()

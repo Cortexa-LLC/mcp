@@ -60,7 +60,7 @@ func TestShouldIncludePath_RepoScopes(t *testing.T) {
 
 	excluded := []string{
 		"price/app/Main.scala",
-		"depop-backend/manage.py",
+		"acme-backend/manage.py",
 		"README.md",
 	}
 	for _, p := range excluded {

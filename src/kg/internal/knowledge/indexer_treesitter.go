@@ -104,9 +104,9 @@ var langRegistry map[string]langConfig
 // name as a single named child and they differ only in that child's type:
 //
 //	Go      package_clause      -> package_identifier   ("auth")
-//	Scala   package_clause      -> package_identifier   ("com.depop.auth")
-//	Java    package_declaration -> scoped_identifier    ("com.depop.auth")
-//	Kotlin  package_header      -> identifier           ("com.depop.auth")
+//	Scala   package_clause      -> package_identifier   ("com.acme.auth")
+//	Java    package_declaration -> scoped_identifier    ("com.acme.auth")
+//	Kotlin  package_header      -> identifier           ("com.acme.auth")
 //
 // Node types were confirmed by parsing real sources rather than read off the
 // grammars. Go is the odd one only in what it yields: a bare identifier with no
@@ -864,7 +864,7 @@ func extractKotlinCallee(node *sitter.Node, src []byte) string {
 //
 //	import java.util.UUID                   → ["java.util.UUID"]
 //	import cats.effect.{IO, Sync}           → ["cats.effect.IO", "cats.effect.Sync"]
-//	import com.depop.a.{Foo => Bar}         → ["com.depop.a.Foo"]  (original, not alias)
+//	import com.acme.a.{Foo => Bar}         → ["com.acme.a.Foo"]  (original, not alias)
 //	import scala.jdk.CollectionConverters._ → ["scala.jdk.CollectionConverters._"]
 func extractScalaImports(node *sitter.Node, src []byte) []string {
 	var prefix []string

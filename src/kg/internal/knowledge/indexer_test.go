@@ -474,7 +474,7 @@ type Server struct{}
 
 func Run() { fmt.Println("x") }
 `,
-		"Service.scala": `package com.depop.app
+		"Service.scala": `package com.acme.app
 
 import cats.effect.IO
 
@@ -539,7 +539,7 @@ func TestIndexer_NoDuplicateEdges(t *testing.T) {
 
 	// Every construct below collapses two declarations onto one entity ID, so a
 	// naive extractor emits the same CONTAINS or IMPORTS edge twice.
-	scala := `package com.depop.dup
+	scala := `package com.acme.dup
 
 import cats.effect.IO
 import cats.effect.{IO, Sync}

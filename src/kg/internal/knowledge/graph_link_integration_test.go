@@ -67,11 +67,11 @@ func TestLinkPackagesDerivesFromIndexedJVMSource(t *testing.T) {
 
 	// The library layer declares the package.
 	indexLayerFromSource(t, aiDir, "libraries", nil, map[string]string{
-		"AuthClient.java": "package com.depop.auth.client;\n\npublic class AuthClient {}\n",
+		"AuthClient.java": "package com.acme.auth.client;\n\npublic class AuthClient {}\n",
 	})
 	// The consumer layer imports a symbol from it.
 	indexLayerFromSource(t, aiDir, "martech", []string{"libraries"}, map[string]string{
-		"Checkout.java": "package com.depop.martech.checkout;\n\nimport com.depop.auth.client.AuthClient;\n\npublic class Checkout {}\n",
+		"Checkout.java": "package com.acme.martech.checkout;\n\nimport com.acme.auth.client.AuthClient;\n\npublic class Checkout {}\n",
 	})
 
 	scope, err := LoadScopeConfig(aiDir, "martech")

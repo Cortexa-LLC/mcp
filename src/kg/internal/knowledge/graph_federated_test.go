@@ -327,9 +327,9 @@ func TestLoadFederatedGraphJoinPolicyByType(t *testing.T) {
 	for _, layer := range []string{"a", "b"} {
 		seedLayer(t, aiDir, layer, nil,
 			fedEntity{layer + ".go", EntityTypeFile},
-			fedEntity{"print", EntityTypeFunction},         // never joins
-			fedEntity{"com.depop.auth", EntityTypePackage}, // joins by default
-			fedEntity{"CodingKeys", EntityTypeType},        // joins only on request
+			fedEntity{"print", EntityTypeFunction},        // never joins
+			fedEntity{"com.acme.auth", EntityTypePackage}, // joins by default
+			fedEntity{"CodingKeys", EntityTypeType},       // joins only on request
 		)
 	}
 	seedLayer(t, aiDir, "estate", []string{"a", "b"}, fedEntity{"estate.md", EntityTypeFile})
@@ -348,7 +348,7 @@ func TestLoadFederatedGraphJoinPolicyByType(t *testing.T) {
 	if got := countNamed(g, "print"); got != 2 {
 		t.Errorf("function \"print\" collapsed to %d node(s); it must never join", got)
 	}
-	if got := countNamed(g, "com.depop.auth"); got != 1 {
+	if got := countNamed(g, "com.acme.auth"); got != 1 {
 		t.Errorf("package joined into %d node(s), want 1", got)
 	}
 	if got := countNamed(g, "CodingKeys"); got != 2 {
@@ -367,7 +367,7 @@ func TestLoadFederatedGraphJoinPolicyByType(t *testing.T) {
 	// An explicitly empty policy joins nothing — the layers stay the
 	// disconnected components they actually are.
 	g3, _ := loadFedJoining(t, aiDir, "estate", 0, []string{})
-	if got := countNamed(g3, "com.depop.auth"); got != 2 {
+	if got := countNamed(g3, "com.acme.auth"); got != 2 {
 		t.Errorf("empty join policy still joined packages: %d node(s), want 2", got)
 	}
 }

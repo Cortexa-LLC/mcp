@@ -389,24 +389,24 @@ single database and no indexer writes one across repositories. Left at that, a
 federated graph is a set of disconnected components.
 
 The dependency is recoverable, because the indexers already record both ends: a
-layer holds an `import` entity named `com.depop.auth.client.AuthClient`, and
-another layer holds a `package` entity named `com.depop.auth.client`. `kg graph
+layer holds an `import` entity named `com.acme.auth.client.AuthClient`, and
+another layer holds a `package` entity named `com.acme.auth.client`. `kg graph
 --federated` resolves the first to the second and adds a `DEPENDS_ON` edge,
 **marked derived and drawn dashed** so it is never mistaken for a relation an
 indexer recorded:
 
 ```bash
-kg graph --federated --root package:com.depop.auth.client --depth 1
+kg graph --federated --root package:com.acme.auth.client --depth 1
 ```
 
 ```
 %% kg graph: 12 node(s), 11 relation(s) of 717633 entities in the project
 %% 11 of those are derived cross-layer links, drawn dashed
     subgraph layer0["libraries"]
-        n0[["com.depop.auth.client"]]:::kgroot
+        n0[["com.acme.auth.client"]]:::kgroot
     end
     subgraph layer1["ads"]
-        n1[/"com.depop.auth.client.AccessToken"/]
+        n1[/"com.acme.auth.client.AccessToken"/]
     end
     ...
     n1 -.->|DEPENDS_ON| n0
@@ -418,7 +418,7 @@ exists to answer.
 Resolution rules:
 
 - **Longest prefix wins**, with a **three-segment minimum**. Without the floor,
-  `com.depop` claims every JVM import in the estate and the graph gains one hub
+  `com.acme` claims every JVM import in the estate and the graph gains one hub
   node instead of a dependency map.
 - **Ambiguity is skipped, never guessed.** If the matched package is defined in
   more than one layer, no edge is drawn and the count is reported. On the estate
@@ -433,7 +433,7 @@ declarations are indexed:
 
 | Language | Package entity | Linkable |
 |---|---|---|
-| Scala | dotted namespace (`com.depop.auth.client`) | yes |
+| Scala | dotted namespace (`com.acme.auth.client`) | yes |
 | Java, Kotlin | dotted namespace | yes, on a graph indexed with kg ≥ `5211bc2` |
 | Go | bare identifier (`auth`) | no — one segment, below the specificity floor |
 | TypeScript, JavaScript, Python, C/C++ | none | no |
@@ -615,8 +615,8 @@ organisation repo names are unique by construction, and a hub serves one
 organisation, so that alone is enough; an owner segment would be a constant.
 
 This handles both shapes of repository without configuration. A meta-repo that
-is a single project stays `depop`. A repo split into scopes publishes `depop`
-for its default scope and `depop.checkout` for the rest — and because the
+is a single project stays `acme`. A repo split into scopes publishes `acme`
+for its default scope and `acme.checkout` for the rest — and because the
 default scope keeps the bare name, adding a second scope later does not rename
 the graph the first one was already pushing to.
 

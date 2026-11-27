@@ -47,7 +47,7 @@ func TestRepoNameFromRemote(t *testing.T) {
 		{"git@github.com:Cortexa-LLC/mcp.git", "mcp"},
 		{"https://github.com/Cortexa-LLC/mcp.git", "mcp"},
 		{"https://github.com/Cortexa-LLC/mcp", "mcp"},
-		{"ssh://git@github.com/Cortexa-LLC/depop.git", "depop"},
+		{"ssh://git@github.com/Cortexa-LLC/acme.git", "acme"},
 		{"https://github.com/Cortexa-LLC/www.cortexa.com.git", "www.cortexa.com"},
 		{"", ""},
 	} {
@@ -60,18 +60,18 @@ func TestRepoNameFromRemote(t *testing.T) {
 // A repo that is one project — the meta-repo case — gets a bare name, not a
 // redundant suffix.
 func TestSingleProjectRepoGetsBareName(t *testing.T) {
-	root := gitRepo(t, "git@github.com:Cortexa-LLC/depop.git")
+	root := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
 	aiDir := filepath.Join(root, ".ai")
 
-	if got := defaultGraphName(root, aiDir, ""); got != "depop" {
-		t.Errorf("unscoped graph name = %q, want depop", got)
+	if got := defaultGraphName(root, aiDir, ""); got != "acme" {
+		t.Errorf("unscoped graph name = %q, want acme", got)
 	}
 }
 
 // The default scope also keeps the bare name, so adding a second scope later
 // does not rename the graph the first one was already pushing to.
 func TestDefaultScopeKeepsBareRepoName(t *testing.T) {
-	root := gitRepo(t, "git@github.com:Cortexa-LLC/depop.git")
+	root := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
 	aiDir := filepath.Join(root, ".ai")
 	writeScope(t, aiDir, "platform", map[string]any{"name": "platform", "database": "platform.db"})
 	writeScope(t, aiDir, "checkout", map[string]any{"name": "checkout", "database": "checkout.db"})
@@ -80,46 +80,46 @@ func TestDefaultScopeKeepsBareRepoName(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if got := defaultGraphName(root, aiDir, "platform"); got != "depop" {
-		t.Errorf("default scope graph name = %q, want depop", got)
+	if got := defaultGraphName(root, aiDir, "platform"); got != "acme" {
+		t.Errorf("default scope graph name = %q, want acme", got)
 	}
-	if got := defaultGraphName(root, aiDir, "checkout"); got != "depop.checkout" {
-		t.Errorf("non-default scope graph name = %q, want depop.checkout", got)
+	if got := defaultGraphName(root, aiDir, "checkout"); got != "acme.checkout" {
+		t.Errorf("non-default scope graph name = %q, want acme.checkout", got)
 	}
 }
 
 // The collision this exists to prevent: the same scope name in two repos must
 // not produce the same graph name.
 func TestSameScopeInDifferentReposDoesNotCollide(t *testing.T) {
-	depop := gitRepo(t, "git@github.com:Cortexa-LLC/depop.git")
 	acme := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
+	acmeTwo := gitRepo(t, "git@github.com:Cortexa-LLC/acme-two.git")
 
-	for _, root := range []string{depop, acme} {
+	for _, root := range []string{acme, acmeTwo} {
 		aiDir := filepath.Join(root, ".ai")
 		writeScope(t, aiDir, "platform", map[string]any{"name": "platform", "database": "platform.db"})
 	}
 
-	a := defaultGraphName(depop, filepath.Join(depop, ".ai"), "platform")
-	b := defaultGraphName(acme, filepath.Join(acme, ".ai"), "platform")
+	a := defaultGraphName(acme, filepath.Join(acme, ".ai"), "platform")
+	b := defaultGraphName(acmeTwo, filepath.Join(acmeTwo, ".ai"), "platform")
 	if a == b {
 		t.Fatalf("both repos push to %q — the collision is still there", a)
 	}
-	if a != "depop.platform" || b != "acme.platform" {
-		t.Errorf("got %q and %q, want depop.platform and acme.platform", a, b)
+	if a != "acme.platform" || b != "acme-two.platform" {
+		t.Errorf("got %q and %q, want acme.platform and acme-two.platform", a, b)
 	}
 }
 
 // A monorepo that wants to pin its published names can, since --graph cannot
 // express per-scope names during --all-scopes.
 func TestHubGraphOverrideWins(t *testing.T) {
-	root := gitRepo(t, "git@github.com:Cortexa-LLC/depop.git")
+	root := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
 	aiDir := filepath.Join(root, ".ai")
 	writeScope(t, aiDir, "checkout", map[string]any{
-		"name": "checkout", "database": "checkout.db", "hubGraph": "depop-payments",
+		"name": "checkout", "database": "checkout.db", "hubGraph": "acme-payments",
 	})
 
-	if got := defaultGraphName(root, aiDir, "checkout"); got != "depop-payments" {
-		t.Errorf("graph name = %q, want the configured depop-payments", got)
+	if got := defaultGraphName(root, aiDir, "checkout"); got != "acme-payments" {
+		t.Errorf("graph name = %q, want the configured acme-payments", got)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestHubGraphOverrideWins(t *testing.T) {
 // with a regex error at the far end of the wire.
 func TestGeneratedNamesAreValidOnTheHub(t *testing.T) {
 	for _, remote := range []string{
-		"git@github.com:Cortexa-LLC/depop.git",
+		"git@github.com:Cortexa-LLC/acme.git",
 		"https://github.com/Cortexa-LLC/www.cortexa.com.git",
 		"https://github.com/Cortexa-LLC/some_repo.git",
 	} {
@@ -150,7 +150,7 @@ func TestGeneratedNamesAreValidOnTheHub(t *testing.T) {
 // A slash would make the name more than one path component, which is exactly
 // what the hub's validation forbids.
 func TestGraphNamesNeverContainSlashes(t *testing.T) {
-	root := gitRepo(t, "git@github.com:Cortexa-LLC/depop.git")
+	root := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
 	aiDir := filepath.Join(root, ".ai")
 	writeScope(t, aiDir, "checkout", map[string]any{"name": "checkout", "database": "checkout.db"})
 

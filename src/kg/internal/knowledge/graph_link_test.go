@@ -44,8 +44,8 @@ func derivedEdges(g *Graph) []string {
 
 func TestLinkPackagesDerivesCrossLayerDependency(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop.auth.client", "libraries"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
+		pkgNode("pkg1", "com.acme.auth.client", "libraries"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
 	)
 
 	report := LinkPackages(g)
@@ -66,13 +66,13 @@ func TestLinkPackagesDerivesCrossLayerDependency(t *testing.T) {
 	}
 }
 
-// The most specific package that prefixes the import wins: com.depop.auth.client
-// tells you which library, com.depop.auth barely narrows it down.
+// The most specific package that prefixes the import wins: com.acme.auth.client
+// tells you which library, com.acme.auth barely narrows it down.
 func TestLinkPackagesPrefersTheLongestPrefix(t *testing.T) {
 	g := linkGraph(
-		pkgNode("short", "com.depop.auth", "libraries"),
-		pkgNode("long", "com.depop.auth.client", "libraries"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
+		pkgNode("short", "com.acme.auth", "libraries"),
+		pkgNode("long", "com.acme.auth.client", "libraries"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
 	)
 
 	LinkPackages(g)
@@ -82,12 +82,12 @@ func TestLinkPackagesPrefersTheLongestPrefix(t *testing.T) {
 	}
 }
 
-// Without a floor on specificity, "com.depop" claims every JVM import in the
+// Without a floor on specificity, "com.acme" claims every JVM import in the
 // estate and the graph gains one hub node instead of a dependency map.
 func TestLinkPackagesIgnoresUnspecificPackages(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop", "libraries"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
+		pkgNode("pkg1", "com.acme", "libraries"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
 	)
 
 	report := LinkPackages(g)
@@ -101,8 +101,8 @@ func TestLinkPackagesIgnoresUnspecificPackages(t *testing.T) {
 // guessing would invent exactly the kind of edge this feature replaces.
 func TestLinkPackagesSkipsAmbiguousTargets(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop.auth.client", "libraries", "tooling"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
+		pkgNode("pkg1", "com.acme.auth.client", "libraries", "tooling"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
 	)
 
 	report := LinkPackages(g)
@@ -113,8 +113,8 @@ func TestLinkPackagesSkipsAmbiguousTargets(t *testing.T) {
 	if report.Ambiguous != 1 {
 		t.Errorf("Ambiguous = %d, want 1", report.Ambiguous)
 	}
-	if len(report.AmbiguousNames) != 1 || report.AmbiguousNames[0] != "com.depop.auth.client" {
-		t.Errorf("AmbiguousNames = %v, want [com.depop.auth.client]", report.AmbiguousNames)
+	if len(report.AmbiguousNames) != 1 || report.AmbiguousNames[0] != "com.acme.auth.client" {
+		t.Errorf("AmbiguousNames = %v, want [com.acme.auth.client]", report.AmbiguousNames)
 	}
 }
 
@@ -122,9 +122,9 @@ func TestLinkPackagesSkipsAmbiguousTargets(t *testing.T) {
 // ambiguity arriving by a different route and must be treated the same way.
 func TestLinkPackagesTreatsSplitNodesAsAmbiguous(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkgA", "com.depop.auth.client", "libraries"),
-		pkgNode("pkgB", "com.depop.auth.client", "tooling"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
+		pkgNode("pkgA", "com.acme.auth.client", "libraries"),
+		pkgNode("pkgB", "com.acme.auth.client", "tooling"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
 	)
 
 	report := LinkPackages(g)
@@ -138,8 +138,8 @@ func TestLinkPackagesTreatsSplitNodesAsAmbiguous(t *testing.T) {
 // structure, which its graph already holds.
 func TestLinkPackagesSkipsSameLayerResolution(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop.auth.client", "libraries"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "libraries"),
+		pkgNode("pkg1", "com.acme.auth.client", "libraries"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "libraries"),
 	)
 
 	report := LinkPackages(g)
@@ -156,8 +156,8 @@ func TestLinkPackagesSkipsSameLayerResolution(t *testing.T) {
 // layers that are not the defining one.
 func TestLinkPackagesLinksWhenAnyLayerIsForeign(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop.auth.client", "libraries"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "libraries", "martech"),
+		pkgNode("pkg1", "com.acme.auth.client", "libraries"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "libraries", "martech"),
 	)
 
 	report := LinkPackages(g)
@@ -172,8 +172,8 @@ func TestLinkPackagesLinksWhenAnyLayerIsForeign(t *testing.T) {
 // nothing. If that changes upstream, this test is the place it surfaces.
 func TestLinkPackagesDoesNotResolveSlashNamespaces(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "@depop/auth-client", "libraries"),
-		importNode("imp1", "@depop/auth-client/dist/index", "martech"),
+		pkgNode("pkg1", "@acme/auth-client", "libraries"),
+		importNode("imp1", "@acme/auth-client/dist/index", "martech"),
 	)
 
 	report := LinkPackages(g)
@@ -186,11 +186,11 @@ func TestLinkPackagesDoesNotResolveSlashNamespaces(t *testing.T) {
 func TestLinkPackagesIsDeterministic(t *testing.T) {
 	build := func() *Graph {
 		return linkGraph(
-			pkgNode("pkgA", "com.depop.auth.client", "libraries"),
-			pkgNode("pkgB", "com.depop.data.store", "data"),
-			importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
-			importNode("imp2", "com.depop.data.store.Reader", "product"),
-			importNode("imp3", "com.depop.auth.client.Jwt", "ads"),
+			pkgNode("pkgA", "com.acme.auth.client", "libraries"),
+			pkgNode("pkgB", "com.acme.data.store", "data"),
+			importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
+			importNode("imp2", "com.acme.data.store.Reader", "product"),
+			importNode("imp3", "com.acme.auth.client.Jwt", "ads"),
 		)
 	}
 
@@ -215,8 +215,8 @@ func TestLinkPackagesIsDeterministic(t *testing.T) {
 // inference on the same footing as a recorded fact.
 func TestDerivedEdgesRenderDistinctly(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop.auth.client", "libraries"),
-		importNode("imp1", "com.depop.auth.client.AuthClient", "martech"),
+		pkgNode("pkg1", "com.acme.auth.client", "libraries"),
+		importNode("imp1", "com.acme.auth.client.AuthClient", "martech"),
 	)
 	LinkPackages(g)
 
@@ -241,7 +241,7 @@ func TestDerivedEdgesRenderDistinctly(t *testing.T) {
 
 // A Java wildcard import resolves to the package name itself. extractImportPath
 // keeps only the scoped_identifier and drops the trailing asterisk, so
-// `import com.depop.auth.client.*;` arrives as "com.depop.auth.client" —
+// `import com.acme.auth.client.*;` arrives as "com.acme.auth.client" —
 // identical to the package it names.
 //
 // The documented rule is "the longest package name that is a dotted prefix of
@@ -250,8 +250,8 @@ func TestDerivedEdgesRenderDistinctly(t *testing.T) {
 // leaving a longer string that the proper-prefix loop does reach.
 func TestLinkPackagesResolvesAnImportEqualToThePackageName(t *testing.T) {
 	g := linkGraph(
-		pkgNode("pkg1", "com.depop.auth.client", "libraries"),
-		importNode("imp1", "com.depop.auth.client", "martech"),
+		pkgNode("pkg1", "com.acme.auth.client", "libraries"),
+		importNode("imp1", "com.acme.auth.client", "martech"),
 	)
 
 	report := LinkPackages(g)

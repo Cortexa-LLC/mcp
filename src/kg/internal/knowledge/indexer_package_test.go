@@ -37,22 +37,22 @@ func TestIndexerMintsPackageEntitiesPerLanguage(t *testing.T) {
 		{
 			name:         "java",
 			file:         "Auth.java",
-			source:       "package com.depop.auth.client;\n\npublic class Auth {}\n",
-			wantName:     "com.depop.auth.client",
+			source:       "package com.acme.auth.client;\n\npublic class Auth {}\n",
+			wantName:     "com.acme.auth.client",
 			wantSegments: 4,
 		},
 		{
 			name:         "kotlin",
 			file:         "Auth.kt",
-			source:       "package com.depop.auth.client\n\nclass Auth\n",
-			wantName:     "com.depop.auth.client",
+			source:       "package com.acme.auth.client\n\nclass Auth\n",
+			wantName:     "com.acme.auth.client",
 			wantSegments: 4,
 		},
 		{
 			name:         "scala",
 			file:         "Auth.scala",
-			source:       "package com.depop.auth.client\n\nclass Auth\n",
-			wantName:     "com.depop.auth.client",
+			source:       "package com.acme.auth.client\n\nclass Auth\n",
+			wantName:     "com.acme.auth.client",
 			wantSegments: 4,
 		},
 		{

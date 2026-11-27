@@ -28,7 +28,7 @@ import (
 // hubs ever federate across orgs.
 //
 // The default scope keeps the bare repo name so that a repo which is one
-// project stays `depop` rather than `depop.default`, and so that adding a
+// project stays `acme` rather than `acme.default`, and so that adding a
 // second scope later does not rename the graph the first one was pushing to.
 //
 // Separator is "." and not "/" because a graph name becomes a single

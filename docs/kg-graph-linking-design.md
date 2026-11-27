@@ -41,12 +41,12 @@ number of derived edges. It halves it, and the reason is worth keeping.
 309 previously-derived links disappeared and 21 appeared. Sampling the ones that went
 shows both mechanisms, and both are the rule behaving correctly on better data:
 
-- **The package is now defined in the importing layer too.** `com.depop.common` was
+- **The package is now defined in the importing layer too.** `com.acme.common` was
   indexed only in `libraries`, so every `clients` import of it looked like a
   cross-repo dependency. Kotlin indexing means `clients` now declares it as well, the
   name resolves to two layers, and the one-layer rule abstains rather than guessing.
 - **A more specific package now matches.** Longest-prefix resolution finds a local
-  `com.depop.backenddrivenui.models.parameter` where it previously had to settle for a
+  `com.acme.backenddrivenui.models.parameter` where it previously had to settle for a
   shorter name defined elsewhere — so the import is same-layer and no edge is drawn,
   which is why that count more than doubled.
 
@@ -152,19 +152,19 @@ behaviour, and `--join-types none` disables joining entirely.
 Joining is identity ("these are the same node"). Dependency is a *relation*, and
 the indexers already record enough to recover it:
 
-- Layer A holds an `import` entity named `@depop/foo` (or `com.depop.foo`).
-- Layer B holds a `package` entity named `@depop/foo`.
+- Layer A holds an `import` entity named `@acme/foo` (or `com.acme.foo`).
+- Layer B holds a `package` entity named `@acme/foo`.
 
 That is a genuine cross-repo dependency, and it becomes an explicit relation rather
 than a fused node:
 
 ```
-(file in A) --IMPORTS--> (import:@depop/foo in A)  ==>  A's file --DEPENDS_ON--> B's package
+(file in A) --IMPORTS--> (import:@acme/foo in A)  ==>  A's file --DEPENDS_ON--> B's package
 ```
 
 **Matching rule (set by measurement — see below): longest namespace-prefix match.**
 An import resolves to the longest `package` name that is a dotted prefix of it, with
-a minimum of three segments so that `com.depop` cannot claim every JVM import in the
+a minimum of three segments so that `com.acme` cannot claim every JVM import in the
 estate.
 
 Rules:
@@ -198,9 +198,9 @@ reproduces the boilerplate problem one level up.
 **Prefix matching passes, and finds real dependencies:**
 
 ```
-com.depop.auth.client.AccessToken       imported in [ads, attribution] -> package com.depop.auth.client in [libraries]
-com.depop.auth.client.AuthClient        imported in [martech, user]    -> package com.depop.auth.client in [libraries]
-com.depop.auth.client.ClientCredentials imported in [engage, feature]  -> package com.depop.auth.client in [libraries]
+com.acme.auth.client.AccessToken       imported in [ads, attribution] -> package com.acme.auth.client in [libraries]
+com.acme.auth.client.AuthClient        imported in [martech, user]    -> package com.acme.auth.client in [libraries]
+com.acme.auth.client.ClientCredentials imported in [engage, feature]  -> package com.acme.auth.client in [libraries]
 ```
 
 Services depending on the shared auth client. The resulting layer pairs are a
@@ -230,7 +230,7 @@ counts them: `%% kg graph: 412 nodes, 690 relations (37 derived)`.
 ## CLI surface
 
 ```bash
-kg graph --federated --root @depop/some-lib --depth 2   # who depends on this library
+kg graph --federated --root @acme/some-lib --depth 2   # who depends on this library
 kg graph --federated --join-types package,import,type   # widen the join
 kg graph --federated --join-types none                  # union with no bridges at all
 kg graph --federated --no-derived                       # only relations an indexer wrote
@@ -255,7 +255,7 @@ kg graph --federated --no-derived                       # only relations an inde
 ## Test plan
 
 - Per-type join policy: a `function` named `print` in three layers stays three nodes;
-  a `package` named `@depop/foo` in two layers becomes one.
+  a `package` named `@acme/foo` in two layers becomes one.
 - Package linking: an import in layer A resolving to a package in layer B produces
   one derived `DEPENDS_ON`; a same-layer resolution produces none; an ambiguous
   package name produces none and is reported.
@@ -290,7 +290,7 @@ reproduced 845 exactly.
 
 | language | package entity | linkable |
 |---|---|---|
-| Java, Kotlin, Scala | dotted namespace (`com.depop.auth.client`) | yes |
+| Java, Kotlin, Scala | dotted namespace (`com.acme.auth.client`) | yes |
 | Go | bare identifier (`auth`) | no — one segment, below the specificity floor |
 | TypeScript, JavaScript, Python, C/C++ | none | no |
 
@@ -330,7 +330,7 @@ and not first.
    are mostly packages genuinely duplicated across repos. Options: accept the loss;
    draw to all candidate layers with a marker; rank by layer priority; or prefer the
    importing layer's own definition, which would reclassify most of these as
-   same-layer and draw nothing — the truthful answer in the `com.depop.common` case.
+   same-layer and draw nothing — the truthful answer in the `com.acme.common` case.
    v1 accepts the loss and reports the count; that is worth revisiting first.
 4. **Should `type` join by default?** `AddressClient` argues yes, `CodingKeys` argues
    no. Proposal: off, revisited once derived edges exist and can be compared against.

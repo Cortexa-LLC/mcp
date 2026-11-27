@@ -462,11 +462,11 @@ func TestIndexer_ScalaFile(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	scalaContent := `package com.depop.address
+	scalaContent := `package com.acme.address
 
 import java.util.UUID
 import cats.effect.{IO, Sync}
-import com.depop.address.repo.{AddressRepo => Repo}
+import com.acme.address.repo.{AddressRepo => Repo}
 import scala.jdk.CollectionConverters._
 
 type AddressId = String
@@ -513,7 +513,7 @@ object AddressService {
 		"java.util.UUID",
 		"cats.effect.IO",
 		"cats.effect.Sync",
-		"com.depop.address.repo.AddressRepo",
+		"com.acme.address.repo.AddressRepo",
 		"scala.jdk.CollectionConverters._",
 	} {
 		if !entityExistsByName(t, store, imp, "import") {
@@ -521,7 +521,7 @@ object AddressService {
 		}
 	}
 	// The rename target must not leak in as a dependency.
-	if entityExistsByName(t, store, "com.depop.address.repo.Repo", "import") {
+	if entityExistsByName(t, store, "com.acme.address.repo.Repo", "import") {
 		t.Error("alias 'Repo' was recorded as an import path; expected the original name")
 	}
 }
@@ -835,7 +835,7 @@ func TestIndexer_ScalaCalls(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	content := `package com.depop.calls
+	content := `package com.acme.calls
 
 object Service {
   def run(x: Int): Int = {
@@ -908,7 +908,7 @@ func TestIndexer_KotlinCalls(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	content := `package com.depop.calls
+	content := `package com.acme.calls
 
 class Worker {
     fun run() {
