@@ -73,8 +73,32 @@ make test                                  # kglib + all servers
 ## Prerequisites
 
 - **Go 1.24+** — [install](https://go.dev/dl/)
-- **kg only**: C compiler — Xcode CLT on macOS (`xcode-select --install`), gcc/clang on Linux
+- **kg only**: C compiler — Xcode CLT on macOS (`xcode-select --install`), gcc/clang on
+  Linux, [MinGW-w64](https://www.mingw-w64.org/) gcc on Windows
 - **markitdown OCR** *(optional)*: Tesseract 5+ (`brew install tesseract`)
+
+### Windows notes
+
+Both servers build and run on Windows; use `install.py` rather than the Makefiles,
+which are Unix-only (`/usr/local/bin`, `install -m 755`).
+
+`kg` links against Kuzu as a **shared** library on Windows. macOS and Linux builds
+carry an `-rpath` that points at the Go module cache, so nothing extra is deployed
+there, but Windows has no rpath — the loader looks in the executable's own directory
+and on `PATH`. `install.py` therefore copies `kuzu_shared.dll` next to `kg.exe`;
+keep the two together when moving the binary, or it exits at startup with
+`kuzu_shared.dll: cannot open shared object file`.
+
+For the same reason, `go test` against `kg` or `kglib` needs that DLL on `PATH`:
+
+```powershell
+$kuzu = (go list -m -f '{{.Dir}}' github.com/kuzudb/go-kuzu) + '\lib\dynamic\windows'
+$env:PATH = "$kuzu;$env:PATH"
+go test ./...
+```
+
+Without it the test binary dies with exit status `0xc0000135` (`STATUS_DLL_NOT_FOUND`)
+before any test runs.
 
 ## MCP Configuration
 
@@ -86,7 +110,7 @@ After installing, add the servers to your MCP client:
 {
   "mcpServers": {
     "markitdown": {
-      "command": "/usr/local/bin/markitdown-mcp"
+      "command": "/usr/local/bin/markitdown"
     },
     "kg": {
       "command": "/usr/local/bin/kg",
@@ -110,7 +134,7 @@ spawns `kg` with the correct working directory, ensuring it opens that project's
 ```json
 {
   "mcpServers": {
-    "markitdown": { "command": "/usr/local/bin/markitdown-mcp" },
+    "markitdown": { "command": "/usr/local/bin/markitdown" },
     "kg":         { "command": "/usr/local/bin/kg", "args": ["server", "--stdio"] }
   }
 }

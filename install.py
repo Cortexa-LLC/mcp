@@ -4,13 +4,14 @@
 Usage:
     python3 install.py                  # install all MCPs
     python3 install.py --mcp kg         # install only kg
-    python3 install.py --mcp markitdown # install only markitdown-mcp
+    python3 install.py --mcp markitdown # install only markitdown
     python3 install.py --list           # list available MCPs
     python3 install.py --help
 """
 
 import argparse
 import datetime
+import json
 import os
 import platform
 import re
@@ -30,7 +31,7 @@ SYSTEM = platform.system()  # "Darwin", "Linux", "Windows"
 MCPS = {
     "markitdown": {
         "src_dir": REPO_ROOT / "src" / "markitdown",
-        "bin_name": "markitdown-mcp.exe" if IS_WINDOWS else "markitdown-mcp",
+        "bin_name": "markitdown.exe" if IS_WINDOWS else "markitdown",
         "cgo": False,
         "description": "Document-to-Markdown converter (HTML, PDF, DOCX, XLSX, PPTX, …)",
         "mcp_args": [],
@@ -41,6 +42,9 @@ MCPS = {
         "cgo": True,
         "description": "Project knowledge graph (KuzuDB-backed, with code indexer)",
         "mcp_args": ["server", "--stdio"],
+        # Windows only; see install_runtime_libs. Each entry is a module in kg's
+        # build list plus the directory inside it holding the DLLs to deploy.
+        "win_runtime_libs": [("github.com/kuzudb/go-kuzu", "lib/dynamic/windows")],
     },
 }
 
@@ -156,7 +160,7 @@ def build_mcp(name: str, cfg: dict) -> Path:
 
     version    = _git(["describe", "--tags", "--always", "--dirty"], "dev")
     commit     = _git(["rev-parse", "--short", "HEAD"], "unknown")
-    build_time = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    build_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     ldflags = (
         f"-s -w"
         f" -X main.Version={version}"
@@ -281,6 +285,58 @@ def install_binary(bin_path: Path, install_dir: Path) -> Path:
         info(f"Previous build kept at {retained} (for reading databases it wrote)")
     return dest
 
+def go_module_dir(module: str, src_dir: Path) -> Path | None:
+    """Where a module in src_dir's build list lives on disk, if it resolves."""
+    result = run("go", "list", "-m", "-f", "{{.Dir}}", module, cwd=src_dir, check=False)
+    path = (result.stdout or "").strip()
+    if result.returncode != 0 or not path:
+        return None
+    resolved = Path(path)
+    return resolved if resolved.is_dir() else None
+
+def install_runtime_libs(name: str, cfg: dict, install_dir: Path) -> list[Path]:
+    """Copy the shared libraries a Windows build needs beside its binary.
+
+    The cgo link flags for macOS and Linux carry -Wl,-rpath, so Kuzu's shared
+    library is found in the Go module cache at run time and nothing needs to be
+    deployed. Windows has no rpath — the loader searches the executable's own
+    directory and PATH — so without this the installed kg.exe exits immediately
+    with "kuzu_shared.dll: cannot open shared object file".
+    """
+    specs = cfg.get("win_runtime_libs") or []
+    if not IS_WINDOWS or not specs:
+        return []
+
+    copied: list[Path] = []
+    for module, rel_dir in specs:
+        mod_dir = go_module_dir(module, cfg["src_dir"])
+        if mod_dir is None:
+            warn(f"Could not locate module {module} — {name} may not start.")
+            continue
+        lib_dir = mod_dir / rel_dir
+        dlls = sorted(lib_dir.glob("*.dll"))
+        if not dlls:
+            warn(f"No DLLs found in {lib_dir} — {name} may not start.")
+            continue
+        for dll in dlls:
+            dest = install_dir / dll.name
+            try:
+                # Files in the module cache are read-only, and so is the copy a
+                # previous install left here; writing onto one fails outright.
+                if dest.exists():
+                    os.chmod(dest, 0o644)
+                shutil.copy2(dll, dest)
+                os.chmod(dest, 0o644)
+            except OSError as e:
+                die(
+                    f"Could not install {dll.name} to {install_dir}: {e}\n"
+                    f"If an MCP client is running {name}, quit it and re-run — "
+                    f"a loaded DLL cannot be replaced while in use."
+                )
+            copied.append(dest)
+            info(f"Installed runtime library: {dest}")
+    return copied
+
 def check_path(install_dir: Path) -> None:
     path_dirs = os.environ.get("PATH", "").split(os.pathsep)
     if str(install_dir) not in path_dirs:
@@ -303,22 +359,21 @@ def print_config(installed: dict[str, tuple[Path, list[str]]]) -> None:
         appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
         desktop_cfg = Path(appdata) / "Claude" / "claude_desktop_config.json"
 
-    snippets = []
+    # Rendered with json.dumps rather than f-strings: a Windows install path is
+    # full of backslashes, and pasting those raw produces a config the client
+    # rejects — "C:\Users\..." is not a valid JSON string.
+    servers: dict[str, dict] = {}
     for name, (bin_path, mcp_args) in installed.items():
-        args_part = ""
+        entry: dict = {"command": str(bin_path)}
         if mcp_args:
-            args_part = ',\n      "args": [' + ", ".join(f'"{a}"' for a in mcp_args) + "]"
-        snippets.append(
-            f'    "{name}": {{\n      "command": "{bin_path}"{args_part}\n    }}'
-        )
+            entry["args"] = list(mcp_args)
+        servers[name] = entry
 
     print()
     print("────────────────────────────────────────────────")
     print("  Add to your MCP client configuration:")
     print("────────────────────────────────────────────────")
-    print('{\n  "mcpServers": {')
-    print(",\n".join(snippets))
-    print("  }\n}")
+    print(json.dumps({"mcpServers": servers}, indent=2))
     print()
     print(f"Claude Desktop config: {desktop_cfg}")
     print("Claude Code config:    .mcp.json in your project root")
@@ -406,6 +461,7 @@ def main() -> None:
         header(name)
         bin_path = build_mcp(name, cfg)
         full_path = install_binary(bin_path, args.prefix)
+        install_runtime_libs(name, cfg, args.prefix)
         installed[name] = (full_path, cfg["mcp_args"])
 
     check_path(args.prefix)

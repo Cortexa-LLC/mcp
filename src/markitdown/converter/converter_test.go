@@ -2,7 +2,6 @@ package converter
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,7 +109,7 @@ func TestConverter_ConvertFile_TooLarge(t *testing.T) {
 func TestConverter_ConvertURI_FileScheme(t *testing.T) {
 	path := writeTempFile(t, "page.html",
 		`<html><body><p>via file URI</p></body></html>`)
-	uri := fmt.Sprintf("file://%s", path)
+	uri := fileURI(path)
 	out, err := newTestConverter().ConvertURI(context.Background(), uri)
 	assertNoErr(t, err)
 	assertContains(t, out, "via file URI")

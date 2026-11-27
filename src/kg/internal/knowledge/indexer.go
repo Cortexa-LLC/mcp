@@ -652,7 +652,7 @@ func (idx *Indexer) batchCreateEntities(entities []entityRecord) error {
 	// every pk in the batch is new and the load cannot collide.
 	query := fmt.Sprintf(
 		`COPY Entity(pk, id, name, type, project_id, created_at, updated_at, visibility) FROM '%s'`,
-		ndjsonPath,
+		cypherPathLiteral(ndjsonPath),
 	)
 	result, err := idx.store.Query(query)
 	if err == nil {
@@ -861,7 +861,7 @@ func (idx *Indexer) bulkLoadRelations(relType string, rels []relationRecord) err
 	f.Close()
 
 	// relType is from AllowedRelTypes whitelist — safe to interpolate
-	query := fmt.Sprintf(`COPY %s FROM '%s'`, relType, ndjsonPath)
+	query := fmt.Sprintf(`COPY %s FROM '%s'`, relType, cypherPathLiteral(ndjsonPath))
 	result, err := idx.store.Query(query)
 	if err != nil {
 		return err

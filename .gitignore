@@ -5,9 +5,12 @@ cover.out
 build/
 
 # Server binaries built in place rather than into build/ — a bare `go build`
-# in a server directory names its output after the directory.
+# in a server directory names its output after the directory, and install.py
+# builds there too. The .exe forms are what a Windows build leaves behind.
 /src/kg/kg
-/src/markitdown/markitdown-mcp
+/src/kg/kg.exe
+/src/markitdown/markitdown
+/src/markitdown/markitdown.exe
 
 # kg's own knowledge graph for this repo: a Kuzu database plus the hand-write
 # journal beside it. Rebuilt from source with `kg index`, so it is never shared.
