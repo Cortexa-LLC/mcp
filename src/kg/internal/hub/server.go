@@ -76,6 +76,10 @@ func NewServerWithAuth(dataDir string, readVerifier, seedVerifier Verifier, kgVe
 // every graph directory. A crash mid-seed strands them, and prune deliberately
 // skips those prefixes; at construction time no seed is in flight (the hub is
 // single-node by design), so anything with a staging prefix is garbage.
+//
+// current.tmp-* is no longer produced — it was the half-built symlink of the
+// old two-record layout — but the pattern is still swept so a data directory
+// that crashed under an older binary comes up clean.
 func (s *Server) sweepStaging() {
 	graphs, err := os.ReadDir(filepath.Join(s.dataDir, "graphs"))
 	if err != nil {
@@ -99,32 +103,30 @@ func (s *Server) sweepStaging() {
 	}
 }
 
-// reconcileInstalls restores the invariant that `current` and the registry
-// name the same commit for every graph.
+// reconcileInstalls reports registry entries the hub cannot serve.
 //
-// install's rollback covers error returns, but a hard kill between its two
-// renames — repointing `current`, then writing the registry — leaves
-// `current` on a commit the registry never recorded. That split is silent
-// and permanent: a search reads the database from `current` but queries it
-// with the registry's ProjectID, so the graph answers HTTP 200 with zero
-// results whenever the project ID changed, and no later read corrects it.
+// There is nothing left here to repair. This pass used to reconcile a `current`
+// symlink against the registry, because install repointed the symlink and then
+// wrote the registry, and a hard kill between the two left `current` on a
+// commit the registry never recorded — a silent, permanent split. The database
+// path now derives from the registered commit (see currentDBPath), so the
+// registry cannot disagree with a second record that no longer exists, and a
+// kill before the registry write simply leaves an unregistered commit
+// directory that the next successful install prunes.
 //
-// The registry write is install's commit point, so the registry is the
-// authority: an unregistered `current` target means the seed never
-// committed, and the symlink is rolled back to the registered commit. The
-// orphaned commit directory is deliberately left in place — the next
-// successful install's prune removes it, and deleting data is not a job for
-// a constructor-time repair pass.
+// What remains is a health check, run at startup because the alternative is
+// discovering it one failed search at a time: a registry entry whose commit
+// directory is absent serves nothing, and no later read corrects it.
 //
 // One residual this cannot see: a kill while re-pushing the commit that is
 // ALREADY installed. install stashes the existing directory as .old-*, moves
 // the new database in, and dies before the registry write; sweepStaging then
-// deletes the stash, and `current` still names the registered commit, so
-// nothing here looks wrong. The graph serves the new database under the old
-// GraphInfo. It needs a same-commit re-push (a dirty push) whose ProjectID
-// also changed, and closing it means stamping the installed database's
-// identity somewhere this pass can compare — not worth the machinery until
-// the failure is observed.
+// deletes the stash, and the registered commit still names a directory that
+// exists, so nothing here looks wrong. The graph serves the new database under
+// the old GraphInfo. It needs a same-commit re-push (a dirty push) whose
+// ProjectID also changed, and closing it means stamping the installed
+// database's identity somewhere this pass can compare — not worth the
+// machinery until the failure is observed.
 func (s *Server) reconcileInstalls() {
 	reg, err := loadRegistry(s.dataDir)
 	if err != nil {
@@ -145,46 +147,8 @@ func (s *Server) reconcileInstalls() {
 			log.Printf("reconcile: registry entry %q records invalid name or commit %q — skipping (the graph will not be served)", name, info.Commit)
 			continue
 		}
-		gdir := s.graphDir(name)
-		currentLink := filepath.Join(gdir, "current")
-
-		// The registered commit's directory is what any repair points at, and
-		// its absence is worth reporting even when there is nothing to repair:
-		// a `current` that already names it still fails every search.
-		registeredExists := true
-		if _, serr := os.Stat(filepath.Join(gdir, info.Commit)); serr != nil {
-			registeredExists = false
-		}
-
-		target, err := os.Readlink(currentLink)
-		switch {
-		case err == nil && target == info.Commit:
-			if !registeredExists {
-				log.Printf("reconcile %s: current names the registered commit %s but its directory is missing — searches will fail and reconcile cannot repair it (restore the directory or re-push)", name, info.Commit)
-			}
-			continue
-		case err != nil && !os.IsNotExist(err):
-			// Something is there but unreadable as a symlink; repairing it
-			// blind could destroy data this pass does not understand.
-			log.Printf("reconcile %s: read current: %v — leaving as is", name, err)
-			continue
-		}
-		// From here: current is missing (a partial copy, a restored backup, an
-		// operator) or points somewhere the registry does not record. Both are
-		// repaired from the registry, which is install's commit point.
-
-		if !registeredExists {
-			log.Printf("reconcile %s: registry records %s but its directory is missing — leaving as is", name, info.Commit)
-			continue
-		}
-		if rerr := replaceSymlink(gdir, currentLink, info.Commit); rerr != nil {
-			log.Printf("reconcile %s: point current at %s: %v", name, info.Commit, rerr)
-			continue
-		}
-		if os.IsNotExist(err) {
-			log.Printf("reconcile %s: current was missing; pointed it at the registered commit %s", name, info.Commit)
-		} else {
-			log.Printf("reconcile %s: current pointed at unregistered commit %s (interrupted seed); rolled back to registered %s", name, target, info.Commit)
+		if _, serr := os.Stat(filepath.Join(s.graphDir(name), info.Commit)); serr != nil {
+			log.Printf("reconcile %s: registry records commit %s but its directory is missing — every search against this graph will fail until the directory is restored or the graph is re-pushed", name, info.Commit)
 		}
 	}
 }
@@ -303,9 +267,19 @@ func (s *Server) graphDir(name string) string {
 	return filepath.Join(s.dataDir, "graphs", name)
 }
 
-// currentDBPath resolves the current database for a graph.
-func (s *Server) currentDBPath(name string) string {
-	return filepath.Join(s.graphDir(name), "current", canonicalDBName)
+// currentDBPath resolves the database file for the commit a graph is
+// registered at. The registry is the only record of which commit is live.
+//
+// commit is validated rather than trusted, because it is joined into a
+// filesystem path and registry.json is both hand-editable and re-read on every
+// request: a recorded commit of ".." would resolve outside the graph's
+// directory. handleSeed validates it on the way in and reconcileInstalls
+// reports it at startup, but neither covers an edit made while the server runs.
+func (s *Server) currentDBPath(name, commit string) (string, error) {
+	if !validPathComponent(commit) {
+		return "", fmt.Errorf("graph %s records an invalid commit %q", name, commit)
+	}
+	return filepath.Join(s.graphDir(name), commit, canonicalDBName), nil
 }
 
 // --- read handlers ---
@@ -383,7 +357,11 @@ func decodeSearchRequest(r *http.Request) (*searchRequest, error) {
 // searchGraph opens a graph's current database read-only and runs a hybrid
 // keyword search (no embedding: the hub does not generate query embeddings).
 func (s *Server) searchGraph(name string, info *GraphInfo, query string, limit int) ([]*knowledge.SearchResult, error) {
-	store, err := knowledge.OpenStoreReadOnly(s.currentDBPath(name))
+	dbPath, err := s.currentDBPath(name, info.Commit)
+	if err != nil {
+		return nil, err
+	}
+	store, err := knowledge.OpenStoreReadOnly(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open graph %s: %w", name, err)
 	}
@@ -784,39 +762,33 @@ func (s *Server) stage(name string, body io.Reader) (tmpDir string, err error) {
 	return tmpDir, nil
 }
 
-// replaceSymlink points link at target atomically: create a temp symlink in
-// dir, then rename it over. dir must be the directory holding link so the
-// rename stays within one filesystem.
-func replaceSymlink(dir, link, target string) error {
-	tmp := filepath.Join(dir, "current.tmp-"+randomSuffix())
-	if err := os.Symlink(target, tmp); err != nil {
-		return fmt.Errorf("create symlink: %w", err)
-	}
-	if err := os.Rename(tmp, link); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename symlink: %w", err)
-	}
-	return nil
-}
-
 // install atomically installs a staged database as graphs/<name>/<commit>,
-// repoints `current`, updates the registry, and only then prunes stale commit
-// directories. Caller holds s.mu and owns tmpDir until install returns.
+// records it in the registry, and only then prunes stale commit directories.
+// Caller holds s.mu and owns tmpDir until install returns.
 //
 // Invariant: install either fully succeeds or leaves the graph exactly as it
-// found it. Every step that can fail — moving the staged directory into place,
-// repointing `current`, writing the registry — happens before the one step
-// that cannot be undone (pruning old commit directories), and each is rolled
-// back if a later one fails.
+// found it. Writing the registry is the commit point and the last step that
+// can fail; the only step before it — moving the staged directory into place —
+// is rolled back on error, and pruning, which cannot be undone, runs only
+// after the commit point has passed.
 //
-// That invariant is what keeps `current` and the registry entry from
-// disagreeing about which commit is installed. A search reads the database
-// from `current` but the ProjectID it queries with from the registry, so a
-// mismatch is an HTTP 200 with zero results whenever the project ID changed,
-// plus a stale advertised commit that no later read can correct. The registry
-// used to be written last, after `current` had already been repointed and the
-// stashed directory deleted, and a registry write error returned without
-// undoing either — leaving exactly that split.
+// The registry is the single record of which commit is live. There used to be
+// a second one: a `current` symlink that readers resolved through the OS,
+// repointed here just before the registry write. Two records meant they could
+// disagree — a search read the database from `current` but the ProjectID it
+// queried with from the registry, so a mismatch answered HTTP 200 with zero
+// results whenever the project ID had changed, and no later read corrected it.
+// Closing that window took a second rollback path here and a repair pass at
+// startup. Resolving the database path from the registered commit instead
+// (see currentDBPath) removes the split by construction.
+//
+// It also removes a hard Windows limitation. Creating a symlink there needs
+// SeCreateSymbolicLinkPrivilege, which a normal user does not hold, so every
+// push failed with "A required privilege is not held by the client". A
+// directory junction needs no privilege but cannot be swapped atomically —
+// Windows refuses to rename any directory over an existing one — so it could
+// not preserve the property the pointer existed for. Renaming a file over an
+// existing file, which is how saveRegistry commits, works on every platform.
 func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) error {
 	gdir := s.graphDir(name)
 
@@ -847,50 +819,45 @@ func (s *Server) install(name, commit string, info *GraphInfo, tmpDir string) er
 		return fmt.Errorf("install commit directory: %w", err)
 	}
 
-	// Remember the previous current target before repointing, for pruning and
-	// for rollback.
-	currentLink := filepath.Join(gdir, "current")
-	prevTarget, _ := os.Readlink(currentLink)
-
-	if err := replaceSymlink(gdir, currentLink, commit); err != nil {
-		restoreCommitDir()
-		return fmt.Errorf("update current symlink: %w", err)
-	}
-	restoreCurrent := func() {
-		if prevTarget == "" {
-			_ = os.Remove(currentLink)
-			return
-		}
-		_ = replaceSymlink(gdir, currentLink, prevTarget)
-	}
-
-	// The registry is the last thing that can fail, and it is written while
-	// both the old and the new commit directories still exist, so a failure
-	// here can be walked all the way back.
+	// The registry write is the commit point, and the last thing that can
+	// fail. It happens while both the old and the new commit directories still
+	// exist, so a failure here can be walked all the way back.
 	reg, err := loadRegistry(s.dataDir)
 	if err != nil {
-		restoreCurrent()
-		restoreCommitDir()
-		return err
-	}
-	reg.Graphs[name] = info
-	if err := saveRegistry(s.dataDir, reg); err != nil {
-		restoreCurrent()
 		restoreCommitDir()
 		return err
 	}
 
-	// Committed. Prune is irreversible, so it runs only now: keep the current
-	// target and the immediately previous target; leave in-flight
-	// .tmp-*/.old-* dirs alone, except our own .old dir.
+	// The commit this graph was registered at until now. Prune keeps its
+	// directory for one more generation, so a reader that resolved it moments
+	// before this write can still open the database it named.
+	prevCommit := ""
+	if prev, ok := reg.graph(name); ok {
+		prevCommit = prev.Commit
+	}
+
+	reg.Graphs[name] = info
+	if err := saveRegistry(s.dataDir, reg); err != nil {
+		restoreCommitDir()
+		return err
+	}
+
+	// Committed. Prune is irreversible, so it runs only now: keep the newly
+	// registered commit and the one before it; leave in-flight .tmp-*/.old-*
+	// dirs alone, except our own .old dir.
+	//
+	// A `current` symlink or a `current.tmp-*` left by a hub that predates the
+	// registry-only layout is no longer special-cased, so it is swept here.
+	// Removing a symlink unlinks the pointer, never the commit directory it
+	// named, and that directory is retained or pruned on its own merits above.
 	entries, rerr := os.ReadDir(gdir)
 	if rerr == nil {
 		for _, e := range entries {
 			n := e.Name()
-			if n == "current" || n == commit || (prevTarget != "" && n == prevTarget) {
+			if n == commit || (prevCommit != "" && n == prevCommit) {
 				continue
 			}
-			if strings.HasPrefix(n, ".tmp-") || strings.HasPrefix(n, ".old-") || strings.HasPrefix(n, "current.tmp-") {
+			if strings.HasPrefix(n, ".tmp-") || strings.HasPrefix(n, ".old-") {
 				continue
 			}
 			_ = os.RemoveAll(filepath.Join(gdir, n))
