@@ -15,3 +15,10 @@ build/
 # kg's own knowledge graph for this repo: a Kuzu database plus the hand-write
 # journal beside it. Rebuilt from source with `kg index`, so it is never shared.
 .ai/
+
+# Claude Code's per-agent git worktrees. Background agents each get an isolated
+# checkout under here so concurrent work cannot collide in one working tree;
+# they are created and removed per run. Only this subdirectory is ignored --
+# .claude/settings.json and friends stay committable if we ever want them
+# shared.
+.claude/worktrees/
