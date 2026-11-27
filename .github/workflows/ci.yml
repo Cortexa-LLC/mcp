@@ -110,3 +110,72 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+  # Windows is where this repository's platform-specific code actually lives:
+  # the renameio-compat shim, cypherPathLiteral, fileURLPath's drive-letter
+  # handling, and the DLL that install.py deploys. Without a Windows runner
+  # every `if runtime.GOOS == "windows"` branch is invisible to CI, and a
+  # regression in it would pass green and surface only when somebody built
+  # there by hand -- which is how this repository reached the state the Windows
+  # support commit had to dig it out of.
+  windows:
+    name: ${{ matrix.module }} (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [kglib, kg, markitdown, renameio-compat]
+    defaults:
+      run:
+        # Git Bash, so these steps are the same shell as the ubuntu legs above
+        # rather than a second PowerShell dialect to maintain.
+        shell: bash
+        working-directory: src/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: src/${{ matrix.module }}/go.mod
+
+      # Doubles as the canary for .gitattributes. gofmt only accepts LF, so if
+      # `eol=lf` ever stops applying and this runner checks files out with CRLF,
+      # it fails here with a clear message instead of puzzling whoever next
+      # clones the repository on Windows.
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error title=gofmt::CRLF checkout or unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # Kuzu links dynamically on Windows and cgo has no rpath to offer there,
+      # so the loader searches the executable's own directory and PATH. `go
+      # test` runs each test binary from a temporary build directory, which the
+      # DLL is not in, and the module cache is not on PATH -- without this the
+      # binary dies before any test runs with exit status 0xc0000135
+      # (STATUS_DLL_NOT_FOUND). Resolved the same way install.py does it.
+      - name: Put the Kuzu DLL on PATH
+        if: matrix.module == 'kg' || matrix.module == 'kglib'
+        run: |
+          kuzu="$(go list -m -f '{{.Dir}}' github.com/kuzudb/go-kuzu)/lib/dynamic/windows"
+          test -f "$kuzu/kuzu_shared.dll" || { echo "::error::kuzu_shared.dll not found at $kuzu"; exit 1; }
+          echo "$kuzu" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Deliberately without -race, unlike the ubuntu legs. ThreadSanitizer
+      # cannot reserve its shadow memory under this toolchain ("failed to
+      # allocate ... error code: 487", ERROR_INVALID_ADDRESS), which fails the
+      # run for reasons that have nothing to do with the code under test. The
+      # ubuntu matrix covers -race; this matrix covers the platform.
+      - name: Test
+        run: go test ./...
