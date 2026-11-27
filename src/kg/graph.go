@@ -88,7 +88,7 @@ Examples:
   kg graph --root app.go --rel CALLS,CONTAINS    # only those relations
   kg graph --type file,package --limit 60        # whole graph, structure only
   kg graph --format dot | dot -Tsvg -o graph.svg # render an image
-  kg graph --root Store --format html -o kg.html # interactive page, opens in a browser
+  kg graph --root Store --format html -o kg.html # interactive page; open it in a browser
   kg graph --personal --format json              # personal store, machine-readable`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Silently ignoring these would render one database and look like it
