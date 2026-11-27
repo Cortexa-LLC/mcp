@@ -162,7 +162,14 @@ jobs:
       - name: Put the Kuzu DLL on PATH
         if: matrix.module == 'kg' || matrix.module == 'kglib'
         run: |
-          kuzu="$(go list -m -f '{{.Dir}}' github.com/kuzudb/go-kuzu)/lib/dynamic/windows"
+          # Download first: `go list -m -f '{{.Dir}}'` prints an EMPTY string for
+          # a module that is not in the local cache rather than failing, so on a
+          # cold runner this silently resolved to "/lib/dynamic/windows". It only
+          # worked when developed against an already-warm cache.
+          go mod download github.com/kuzudb/go-kuzu
+          dir="$(go list -m -f '{{.Dir}}' github.com/kuzudb/go-kuzu)"
+          test -n "$dir" || { echo "::error::could not resolve the go-kuzu module directory"; exit 1; }
+          kuzu="$dir/lib/dynamic/windows"
           test -f "$kuzu/kuzu_shared.dll" || { echo "::error::kuzu_shared.dll not found at $kuzu"; exit 1; }
           echo "$kuzu" >> "$GITHUB_PATH"
 
