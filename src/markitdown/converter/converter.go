@@ -82,7 +82,11 @@ func (c *Converter) ConvertURI(ctx context.Context, uri string) (string, error) 
 
 	switch u.Scheme {
 	case schemeFile:
-		return c.ConvertFile(ctx, fileURLPath(u))
+		path, perr := fileURLPath(u)
+		if perr != nil {
+			return "", perr
+		}
+		return c.ConvertFile(ctx, path)
 	case schemeHTTP, schemeHTTPS:
 		return c.native.ConvertURL(ctx, uri)
 	default:

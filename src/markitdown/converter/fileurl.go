@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"runtime"
@@ -13,14 +14,21 @@ import (
 // file:///C:/dir/page.html parses to the path "/C:/dir/page.html", and opening
 // it verbatim fails with "The filename, directory name, or volume label syntax
 // is incorrect" — the leading slash has to come off before the drive letter.
-// A UNC location arrives as a host plus a path (file://server/share/page.html)
-// and has to be rebuilt as \\server\share\page.html.
 //
 // On Unix the URL path is already the filesystem path and is returned as-is.
-func fileURLPath(u *url.URL) string {
-	// An empty host, or the conventional "localhost", both mean this machine.
+func fileURLPath(u *url.URL) (string, error) {
+	// A host names a file on some other machine, and this refuses to go and get
+	// it. The natural Windows reading of file://host/share/file is the UNC path
+	// \\host\share\file, and opening that makes the OS dial SMB on a host the
+	// caller chose: it hands an attacker-supplied server the user's NTLM
+	// credentials to relay, and turns "convert this document" into an outbound
+	// network request to an arbitrary address. A document converter has no
+	// legitimate reason to follow one.
+	//
+	// An empty host, and the conventional "localhost", both mean this machine.
 	if host := u.Host; host != "" && !strings.EqualFold(host, "localhost") {
-		return filepath.FromSlash("//" + host + u.Path)
+		return "", fmt.Errorf(
+			"file URL names the remote host %q; only file URLs on this machine are supported", host)
 	}
 
 	p := u.Path
@@ -30,7 +38,7 @@ func fileURLPath(u *url.URL) string {
 	if runtime.GOOS == "windows" && hasDriveLetter(p) {
 		p = p[1:]
 	}
-	return filepath.FromSlash(p)
+	return filepath.FromSlash(p), nil
 }
 
 // hasDriveLetter reports whether a URL path begins with /X:, the shape a
