@@ -133,12 +133,8 @@ func TestHubPushListSearchPrune(t *testing.T) {
 		if _, err := os.Stat(db); err != nil {
 			t.Errorf("stored database missing: %v", err)
 		}
-		target, err := os.Readlink(filepath.Join(dataDir, "graphs", "platform", "current"))
-		if err != nil {
-			t.Fatalf("current symlink: %v", err)
-		}
-		if target != commitA {
-			t.Errorf("current -> %q, want %q", target, commitA)
+		if got := registeredCommit(t, dataDir, "platform"); got != commitA {
+			t.Errorf("registered commit = %q, want %q", got, commitA)
 		}
 	})
 
@@ -206,12 +202,8 @@ func TestHubPushListSearchPrune(t *testing.T) {
 		if err := pushFixture(t, ts.URL, "platform", dbPath, commitB, nil); err != nil {
 			t.Fatalf("push commitB: %v", err)
 		}
-		target, err := os.Readlink(filepath.Join(dataDir, "graphs", "platform", "current"))
-		if err != nil {
-			t.Fatalf("current symlink: %v", err)
-		}
-		if target != commitB {
-			t.Errorf("current -> %q, want %q", target, commitB)
+		if got := registeredCommit(t, dataDir, "platform"); got != commitB {
+			t.Errorf("registered commit = %q, want %q", got, commitB)
 		}
 
 		if err := pushFixture(t, ts.URL, "platform", dbPath, commitC, nil); err != nil {

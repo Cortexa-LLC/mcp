@@ -129,6 +129,17 @@ discipline the stdio server uses). A seed writes a new commit dir, fsyncs, then 
 the symlink; in-flight reads finish against the old snapshot. Keep the last N snapshots
 (default 2), prune older.
 
+> **Superseded:** the `current` symlink no longer exists. Reads resolve
+> `graphs/<name>/<commit>/knowledge.db` from the commit in `registry.json`, whose
+> own atomic write is the commit point. Two records of the live commit could
+> disagree, and keeping them in step cost a rollback path in `install` plus a
+> repair pass at startup; one record cannot. It also unblocked Windows, where
+> creating a symlink needs a privilege normal users lack and a junction — the
+> privilege-free alternative — cannot be swapped atomically, because Windows
+> refuses to rename any directory over an existing one. The rest of this
+> section still holds: snapshots are sealed per commit, in-flight reads finish
+> against the snapshot they opened, and prune keeps the last two.
+
 **Registry entry:**
 
 ```json

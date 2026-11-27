@@ -13,7 +13,7 @@ import (
 )
 
 // plantEscapedGraph writes a real database at a path that is *outside* the
-// hub's data directory but reachable from graphs/<name>/current when <name> is
+// hub's data directory but reachable from graphs/<name>/<commit> when <name> is
 // allowed to navigate, and registers it in registry.json under that name.
 //
 // registry.json is a plain file an operator edits by hand, which is exactly why
@@ -22,7 +22,7 @@ import (
 func plantEscapedGraph(t *testing.T, dataDir, name, entityName string) {
 	t.Helper()
 
-	dbDir := filepath.Dir(filepath.Join(dataDir, "graphs", name, "current", canonicalDBName))
+	dbDir := filepath.Dir(filepath.Join(dataDir, "graphs", name, commitC, canonicalDBName))
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		t.Fatalf("create escaped graph dir: %v", err)
 	}

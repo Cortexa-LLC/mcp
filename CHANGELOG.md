@@ -68,6 +68,26 @@ everything below it is unreleased.
 
 ### Changed
 
+- **The hub no longer keeps a `current` symlink.** A graph's live database is
+  resolved as `graphs/<name>/<commit>/knowledge.db` from the commit in
+  `registry.json`, whose atomic write was already `install`'s commit point. Two
+  records of the same fact could disagree — a search read the database from the
+  symlink but its ProjectID from the registry, answering HTTP 200 with zero
+  results whenever the project ID had changed — and keeping them in step cost a
+  second rollback path in `install` and a repair pass at startup. Both are gone.
+
+  This is also what unblocks the hub on Windows, where creating a symlink needs
+  `SeCreateSymbolicLinkPrivilege` that normal users do not hold, so every push
+  failed with "A required privilege is not held by the client". A directory
+  junction needs no privilege but cannot be swapped atomically, because Windows
+  refuses to rename any directory over an existing one; renaming a file over a
+  file, which is how the registry commits, works everywhere.
+
+  Existing hubs need no migration — the registry already records the commit, and
+  commit directories are already named for it. A stale `current` is inert and
+  the next push's prune removes it. The change is one-way: a hub data directory
+  written by this version is not readable by an older binary, which still looks
+  for `current`.
 - Hub graph names are derived from the repository rather than supplied.
 - `make install` retains the outgoing binary, so a bad build can be rolled back.
 - The personal store moved out of `~/.ai` to `~/.kg` (`KG_HOME`).
