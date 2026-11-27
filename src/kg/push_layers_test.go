@@ -117,13 +117,13 @@ func TestPushedLayersResolveOnTheHub(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	// An unrelated repo already holds the bare scope name on this hub.
-	decoyDB := filepath.Join(t.TempDir(), "harvana.db")
-	seedDB(t, decoyDB, "HarvanaSecret", "harvana", testDecoyCommit)
+	decoyDB := filepath.Join(t.TempDir(), "acme.db")
+	seedDB(t, decoyDB, "AcmeSecret", "acme", testDecoyCommit)
 	err := hub.Push(hub.PushRequest{
 		HubURL: ts.URL, Graph: "platform", DBPath: decoyDB, SeedToken: "s3cret",
 		Meta: kglib.KGMeta{
-			ProjectID: "harvana", Commit: testDecoyCommit,
-			RepoURL: "git@github.com:Cortexa-LLC/harvana.git", IndexedAt: time.Now().UTC(),
+			ProjectID: "acme", Commit: testDecoyCommit,
+			RepoURL: "git@github.com:Cortexa-LLC/acme.git", IndexedAt: time.Now().UTC(),
 		},
 	})
 	if err != nil {
@@ -149,9 +149,9 @@ func TestPushedLayersResolveOnTheHub(t *testing.T) {
 	})
 
 	t.Run("the layer does not resolve to an unrelated repo's graph", func(t *testing.T) {
-		out := searchWithLayers(t, ts.URL, "depop.checkout", "HarvanaSecret")
-		if out.has("HarvanaSecret") {
-			t.Errorf("depop.checkout federated harvana's graph: the layer reference resolved to the "+
+		out := searchWithLayers(t, ts.URL, "depop.checkout", "AcmeSecret")
+		if out.has("AcmeSecret") {
+			t.Errorf("depop.checkout federated acme's graph: the layer reference resolved to the "+
 				"bare name %q owned by another repo (layers_searched = %v)", "platform", out.LayersSearched)
 		}
 	})
