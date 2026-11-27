@@ -32,7 +32,15 @@ func TestReadOnlyModeDoesNotBlockFileWrites(t *testing.T) {
 	}
 	_ = store.Close()
 
-	payload := "COPY (MATCH (e:Entity) RETURN e.name) TO '" + target + "'"
+	// Forward slashes, not the native path: Kuzu reads a backslash inside a
+	// string literal as an escape, so on Windows the raw path from
+	// filepath.Join makes this statement unparseable. The query would then fail
+	// for a reason that has nothing to do with the property under test, no file
+	// would be written, and the stat below would report the opposite of the
+	// truth -- that read-only mode had started blocking filesystem writes.
+	// Kuzu accepts forward slashes on every platform, and os.Stat still finds
+	// the file under its native name.
+	payload := "COPY (MATCH (e:Entity) RETURN e.name) TO '" + filepath.ToSlash(target) + "'"
 
 	// The property that actually protects users.
 	if err := IsReadOnlyCypher(payload); err == nil {

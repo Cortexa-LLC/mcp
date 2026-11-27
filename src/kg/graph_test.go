@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -335,12 +336,18 @@ func TestWriteFileAtomic(t *testing.T) {
 
 	// CreateTemp makes 0600; a rendered diagram should be readable like any
 	// other output file rather than inheriting the temp file's mode.
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o644 {
-		t.Errorf("mode = %v, want 0644", perm)
+	//
+	// Skipped on Windows, which has no Unix permission bits: Go synthesises a
+	// mode from the read-only attribute alone, so every writable file reports
+	// 0666 and the assertion could never hold there.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Errorf("mode = %v, want 0644", perm)
+		}
 	}
 
 	// No temporary files left behind.
