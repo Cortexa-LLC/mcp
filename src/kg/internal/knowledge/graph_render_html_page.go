@@ -535,7 +535,9 @@ const htmlTemplate = `<!doctype html>
     userMoved = false;
     fit();
   });
-  window.addEventListener("resize", function () { if (!running) { fit(); } });
+  // Guarded by userMoved for the same reason the settle path above is: a resize
+  // is not a request to be re-framed. Hit "fit" to get the automatic framing back.
+  window.addEventListener("resize", function () { if (!running && !userMoved) { fit(); } });
 
   svg.addEventListener("wheel", function (ev) {
     ev.preventDefault();
