@@ -92,20 +92,20 @@ func TestDefaultScopeKeepsBareRepoName(t *testing.T) {
 // not produce the same graph name.
 func TestSameScopeInDifferentReposDoesNotCollide(t *testing.T) {
 	acme := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
-	acme-two := gitRepo(t, "git@github.com:Cortexa-LLC/acme-two.git")
+	acme := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
 
-	for _, root := range []string{acme, acme-two} {
+	for _, root := range []string{acme, acme} {
 		aiDir := filepath.Join(root, ".ai")
 		writeScope(t, aiDir, "platform", map[string]any{"name": "platform", "database": "platform.db"})
 	}
 
 	a := defaultGraphName(acme, filepath.Join(acme, ".ai"), "platform")
-	b := defaultGraphName(acme-two, filepath.Join(acme-two, ".ai"), "platform")
+	b := defaultGraphName(acme, filepath.Join(acme, ".ai"), "platform")
 	if a == b {
 		t.Fatalf("both repos push to %q — the collision is still there", a)
 	}
-	if a != "acme.platform" || b != "acme-two.platform" {
-		t.Errorf("got %q and %q, want acme.platform and acme-two.platform", a, b)
+	if a != "acme.platform" || b != "acme.platform" {
+		t.Errorf("got %q and %q, want acme.platform and acme.platform", a, b)
 	}
 }
 

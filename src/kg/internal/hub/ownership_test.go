@@ -56,7 +56,7 @@ func TestGraphOwnershipAcrossPushes(t *testing.T) {
 
 	// A different one may not.
 	resp = rawSeed(t, ts.URL, "platform", "def456", map[string]string{
-		"X-KG-Repo":    "github.com/Cortexa-LLC/acme-two",
+		"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
 		"X-KG-Version": "dev",
 	})
 	if resp.StatusCode != http.StatusConflict {
@@ -66,7 +66,7 @@ func TestGraphOwnershipAcrossPushes(t *testing.T) {
 
 	// Unless it says so explicitly, for a repo that really was renamed.
 	resp = rawSeed(t, ts.URL, "platform", "def456", map[string]string{
-		"X-KG-Repo":    "github.com/Cortexa-LLC/acme-two",
+		"X-KG-Repo":    "github.com/Cortexa-LLC/acme",
 		"X-KG-Force":   "1",
 		"X-KG-Version": "dev",
 	})

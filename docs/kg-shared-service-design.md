@@ -397,7 +397,7 @@ identity instead, which is a separate grant against the same issuer.
 ### Secrets
 
 `KG_HUB_READ_TOKEN` and `KG_HUB_SEED_TOKEN` are credentials, and cortexa.com's rule is
-that credentials live in Infisical (self-hosted at `infisical.example.com`) while
+that credentials live in a self-hosted Infisical instance while
 non-sensitive config does not. They are currently plain env vars, and the read token is
 additionally copied into every client's scope config. Moving them is worth doing
 independently of any OIDC work, and settles where CI gets the seed token for `kg push`.
