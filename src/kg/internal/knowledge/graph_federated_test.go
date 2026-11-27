@@ -327,9 +327,9 @@ func TestLoadFederatedGraphJoinPolicyByType(t *testing.T) {
 	for _, layer := range []string{"a", "b"} {
 		seedLayer(t, aiDir, layer, nil,
 			fedEntity{layer + ".go", EntityTypeFile},
-			fedEntity{"print", EntityTypeFunction},         // never joins
+			fedEntity{"print", EntityTypeFunction},        // never joins
 			fedEntity{"com.acme.auth", EntityTypePackage}, // joins by default
-			fedEntity{"CodingKeys", EntityTypeType},        // joins only on request
+			fedEntity{"CodingKeys", EntityTypeType},       // joins only on request
 		)
 	}
 	seedLayer(t, aiDir, "estate", []string{"a", "b"}, fedEntity{"estate.md", EntityTypeFile})
