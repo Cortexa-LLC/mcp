@@ -556,7 +556,6 @@ const htmlTemplate = `<!doctype html>
   var panning = null;
   svg.addEventListener("pointerdown", function (ev) {
     if (ev.target.closest && ev.target.closest(".node")) { return; }
-    userMoved = true;
     panning = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y };
     svg.classList.add("panning");
     svg.setPointerCapture(ev.pointerId);
@@ -565,6 +564,10 @@ const htmlTemplate = `<!doctype html>
     if (!panning) { return; }
     view.x = panning.vx + (ev.clientX - panning.x);
     view.y = panning.vy + (ev.clientY - panning.y);
+    // Here rather than on pointerdown: a click on empty canvas that never
+    // moves has not framed anything, so it must not count as the reader
+    // taking over the view. Same reasoning as the node drag's moved flag.
+    userMoved = true;
     applyView();
   });
   function endPan() { panning = null; svg.classList.remove("panning"); }

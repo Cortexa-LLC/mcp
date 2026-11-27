@@ -26,7 +26,7 @@ import (
 //   - The only part of the file that varies is one JSON payload. Everything
 //     else is a fixed template. That matters because it means there is exactly
 //     one injection site to reason about, and encoding/json has already
-//     escaped <, > and & to <, > and & by default — so the
+//     escaped <, > and & to \u003c, \u003e and \u0026 by default — so the
 //     payload cannot close the <script> element that holds it. The page then
 //     builds every label with textContent, never innerHTML, so entity names
 //     are data on both sides of the boundary. See TestRenderHTMLNeutralises...
