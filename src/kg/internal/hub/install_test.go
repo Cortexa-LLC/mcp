@@ -106,15 +106,17 @@ func contains(names []string, want string) bool {
 }
 
 // A push that cannot record itself in the registry must not change what the
-// hub serves. The property under test is agreement, not any single artifact:
-// after the failed push the hub must still answer the query it could answer
-// before, which is only true if `current` and the registry's ProjectID still
-// describe the same, previously installed commit.
+// hub serves. After the failed push the hub must still answer the query it
+// could answer before, which holds only if the registry still names the
+// previously installed commit and the staged directory has been rolled back.
 //
-// Before the install() reordering, `current` was repointed and the stashed
-// directory deleted before the registry was written, and a registry error
-// returned without undoing either — so the hub served the new database while
-// querying it with the old project ID, and every search came back empty.
+// This used to be a test about two records agreeing. install() repointed a
+// `current` symlink and deleted the stashed directory before writing the
+// registry, and a registry error returned without undoing either — so the hub
+// served the new database while querying it with the old project ID, and every
+// search came back empty. The registry is now the only record of the live
+// commit, which makes that particular split unrepresentable; what remains worth
+// testing is that a failed registry write leaves the filesystem as it was.
 func TestRegistryWriteFailureLeavesGraphUnchanged(t *testing.T) {
 	oldDB := buildFixtureDBFor(t, "OldEntity", "proj-old", commitA)
 	newDB := buildFixtureDBFor(t, "NewEntity", "proj-new", commitB)
@@ -141,7 +143,8 @@ func TestRegistryWriteFailureLeavesGraphUnchanged(t *testing.T) {
 	names, commit := searchNames(t, ts.URL, "g", "OldEntity")
 	if !contains(names, "OldEntity") {
 		t.Errorf("after a failed push the hub no longer answers for the graph it advertises: "+
-			"searching %q for OldEntity returned %v — `current` and the registry's ProjectID disagree", commit, names)
+			"searching %q for OldEntity returned %v — the registry no longer names the "+
+			"commit whose database is installed", commit, names)
 	}
 	if commit != commitA {
 		t.Errorf("advertised commit = %q, want the still-installed %q", commit, commitA)
