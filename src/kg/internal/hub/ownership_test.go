@@ -8,7 +8,7 @@ import (
 
 // A hub namespace is shared by every repo pushing to it, and graph names can be
 // overridden by hand. Without an ownership check, a name collision silently
-// replaces anacme-two team's graph — they lose their knowledge and nothing says so.
+// replaces another team's graph — they lose their knowledge and nothing says so.
 func TestSeedRefusesPushFromADifferentRepo(t *testing.T) {
 	ts, _ := newTestHub(t, "", "s3cret", "dev")
 
