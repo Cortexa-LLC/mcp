@@ -864,7 +864,7 @@ func extractKotlinCallee(node *sitter.Node, src []byte) string {
 //
 //	import java.util.UUID                   → ["java.util.UUID"]
 //	import cats.effect.{IO, Sync}           → ["cats.effect.IO", "cats.effect.Sync"]
-//	import com.acme.a.{Foo => Bar}         → ["com.acme.a.Foo"]  (original, not alias)
+//	import com.acme.a.{Foo => Bar}          → ["com.acme.a.Foo"]  (original, not alias)
 //	import scala.jdk.CollectionConverters._ → ["scala.jdk.CollectionConverters._"]
 func extractScalaImports(node *sitter.Node, src []byte) []string {
 	var prefix []string

@@ -152,7 +152,7 @@ func TestPushedLayersResolveOnTheHub(t *testing.T) {
 		out := searchWithLayers(t, ts.URL, "acme.checkout", "AcmeTwoSecret")
 		if out.has("AcmeTwoSecret") {
 			t.Errorf("acme.checkout federated acme-two's graph: the layer reference resolved to the "+
-				"bare name %q owned by anacme-two repo (layers_searched = %v)", "platform", out.LayersSearched)
+				"bare name %q owned by another repo (layers_searched = %v)", "platform", out.LayersSearched)
 		}
 	})
 
@@ -177,7 +177,7 @@ func TestPushedLayersResolveOnTheHub(t *testing.T) {
 }
 
 // hubGraph pins a scope's published name, and a layer pointing at that scope
-// has to follow it — acme-twowise the pin silently breaks federation for every
+// has to follow it — otherwise the pin silently breaks federation for every
 // scope that layers on the pinned one.
 func TestLayerNamesFollowHubGraphOverrides(t *testing.T) {
 	root := gitRepo(t, "git@github.com:Cortexa-LLC/acme.git")
